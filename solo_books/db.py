@@ -123,6 +123,21 @@ MIGRATIONS = [
     CREATE INDEX transactions_by_category ON transactions (category_id, posted_on);
     CREATE INDEX transactions_by_natural_key ON transactions (account_id, natural_key);
 
+    -- Every live import whose file held a row, not only the one that first added it.
+    CREATE TABLE import_rows (
+        import_id       INTEGER NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
+        transaction_id  INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+        PRIMARY KEY (import_id, transaction_id)
+    );
+    CREATE INDEX import_rows_by_transaction ON import_rows (transaction_id);
+
+    -- Rows a person held back when making a rule. That rule never books them.
+    CREATE TABLE rule_exceptions (
+        rule_id         INTEGER NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+        transaction_id  INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+        PRIMARY KEY (rule_id, transaction_id)
+    );
+
     -- Bank rows someone deleted on purpose, so a later overlapping export does not bring them back.
     CREATE TABLE deleted_rows (
         account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,

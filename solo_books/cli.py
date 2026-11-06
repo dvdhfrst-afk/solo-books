@@ -307,7 +307,9 @@ def cmd_imports_list(args, conn) -> int:
 def cmd_imports_undo(args, conn) -> int:
     outcome = importer.undo_import(conn, args.id, force=args.force)
     print(f"Removed {outcome['removed']} row(s) from import {args.id}.")
-    print("Any of them that a later file also held are gone too. Import that file again to bring them back.")
+    if outcome["kept"]:
+        others = ", ".join(str(other) for other in outcome["kept_in"])
+        print(f"Kept {outcome['kept']} row(s) that import(s) {others} also held. Undo those too to remove them.")
     return 0
 
 

@@ -7,7 +7,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional
 
 from .csvmap import Mapping, ParsedRow, parse_export
 from .db import transaction
@@ -112,6 +112,14 @@ def import_export(
     return result
 
 
+class _Verdict(NamedTuple):
+    kind: str  # new, duplicate, deleted or conflict
+    key: str
+    occurrence: int = 0
+    detail: str = ""
+    matched: Optional[int] = None
+
+
 class _RowMatcher:
     """Decides whether each row of a file is already in the books.
 
@@ -159,21 +167,21 @@ class _RowMatcher:
             return row["id"]
         return None
 
-    def classify(self, row: ParsedRow) -> Tuple[str, str, int, str]:
-        """Returns (verdict, dedupe key, occurrence, detail). Verdicts are new, duplicate, deleted, conflict."""
+    def classify(self, row: ParsedRow) -> _Verdict:
         natural = natural_key(row.posted_on, row.amount_cents, row.description)
         if not row.reference:
             key = plain_key(natural)
-            if self._claim(natural, only_without_id=False) is not None:
-                return "duplicate", key, 0, ""
+            matched = self._claim(natural, only_without_id=False)
+            if matched is not None:
+                return _Verdict("duplicate", key, matched=matched)
             if self._deleted_for(natural):
                 self._deleted_for(natural).pop()
-                return "deleted", key, 0, ""
+                return _Verdict("deleted", key)
             taken = self.conn.execute(
                 "SELECT COALESCE(MAX(occurrence), 0) FROM transactions WHERE account_id = ? AND dedupe_key = ?",
                 (self.account_id, key),
             ).fetchone()[0]
-            return "new", key, taken + 1, ""
+            return _Verdict("new", key, taken + 1)
 
         key = reference_key(row.reference)
         self.seen_ids[key] += 1
@@ -182,7 +190,7 @@ class _RowMatcher:
             "SELECT 1 FROM deleted_rows WHERE account_id = ? AND dedupe_key = ? AND occurrence = ?",
             (self.account_id, key, occurrence),
         ).fetchone():
-            return "deleted", key, occurrence, ""
+            return _Verdict("deleted", key, occurrence)
         holder = self.conn.execute(
             "SELECT id, posted_on, amount_cents, description FROM transactions"
             " WHERE account_id = ? AND dedupe_key = ? AND occurrence = ?",
@@ -192,8 +200,8 @@ class _RowMatcher:
             self.claimed.add(holder["id"])
             days_apart = abs((date.fromisoformat(holder["posted_on"]) - row.posted_on).days)
             if holder["amount_cents"] == row.amount_cents and days_apart <= _SAME_ID_DAYS:
-                return "duplicate", key, occurrence, ""
-            return (
+                return _Verdict("duplicate", key, occurrence, matched=holder["id"])
+            return _Verdict(
                 "conflict",
                 key,
                 occurrence,
@@ -208,13 +216,13 @@ class _RowMatcher:
                 "UPDATE transactions SET dedupe_key = ?, occurrence = ?, reference = ? WHERE id = ?",
                 (key, occurrence, row.reference, without_id),
             )
-            return "duplicate", key, occurrence, ""
+            return _Verdict("duplicate", key, occurrence, matched=without_id)
         deleted = self._deleted_for(natural)
         for index, deleted_key in enumerate(deleted):
             if deleted_key.startswith("row:"):
                 del deleted[index]
-                return "deleted", key, occurrence, ""
-        return "new", key, occurrence, ""
+                return _Verdict("deleted", key, occurrence)
+        return _Verdict("new", key, occurrence)
 
 
 def _insert_rows(
@@ -243,21 +251,22 @@ def _insert_rows(
         natural = natural_key(row.posted_on, row.amount_cents, row.description)
         if not row.reference:
             repeats[natural] += 1
-        verdict, key, occurrence, detail = matcher.classify(row)
-        if verdict == "duplicate":
+        verdict = matcher.classify(row)
+        if verdict.kind == "duplicate":
+            _record_held(conn, import_id, verdict.matched)
             result.rows_duplicate += 1
             continue
-        if verdict == "deleted":
+        if verdict.kind == "deleted":
             result.rows_deleted_before += 1
             continue
-        if verdict == "conflict":
-            result.conflicts.append(detail)
+        if verdict.kind == "conflict":
+            result.conflicts.append(verdict.detail)
             continue
 
         merchant = merchant_key(row.description)
         rule = first_match(rules, account["id"], row.description, row.memo, merchant, row.amount_cents)
-        _warn_near_duplicate(conn, account, row, key, result)
-        conn.execute(
+        _warn_near_duplicate(conn, account, row, verdict.key, result)
+        inserted = conn.execute(
             "INSERT INTO transactions (account_id, posted_on, amount_cents, description, memo, reference, merchant,"
             " dedupe_key, natural_key, occurrence, import_id, category_id, category_source, rule_id)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -269,15 +278,16 @@ def _insert_rows(
                 row.memo,
                 row.reference,
                 merchant,
-                key,
+                verdict.key,
                 natural,
-                occurrence,
+                verdict.occurrence,
                 import_id,
                 rule.category_id if rule else None,
                 "rule" if rule else None,
                 rule.id if rule else None,
             ),
         )
+        _record_held(conn, import_id, inserted.lastrowid)
         result.rows_new += 1
         if rule:
             result.auto_categorized += 1
@@ -295,6 +305,12 @@ def _insert_rows(
             f"{total} rows in this file repeat another row on the same day with the same amount and text. "
             "They were kept as separate purchases. If one is a mistake, remove it with 'txn delete'."
         )
+
+
+def _record_held(conn: sqlite3.Connection, import_id: int, transaction_id: int) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO import_rows (import_id, transaction_id) VALUES (?, ?)", (import_id, transaction_id)
+    )
 
 
 def _settle_conflicts(file_name: str, result: ImportResult, stop: bool) -> None:
@@ -382,27 +398,40 @@ def list_imports(conn: sqlite3.Connection, account_id: Optional[int] = None) -> 
     return conn.execute(sql + " WHERE i.account_id = ? ORDER BY i.id", (account_id,)).fetchall()
 
 
-def undo_import(conn: sqlite3.Connection, import_id: int, force: bool = False) -> Dict[str, int]:
-    """Take a whole import back out. Importing the same file again later works normally."""
+def undo_import(conn: sqlite3.Connection, import_id: int, force: bool = False) -> Dict:
+    """Take back what only this file put in the books. A row another live import also held stays."""
     row = conn.execute("SELECT * FROM imports WHERE id = ?", (import_id,)).fetchone()
     if row is None:
         raise BooksError(f"no import {import_id}")
     if row["undone_at"]:
         raise BooksError(f"import {import_id} was already undone")
-    reconciled = conn.execute(
-        "SELECT COUNT(*) FROM transactions WHERE import_id = ? AND reconciliation_id IS NOT NULL", (import_id,)
-    ).fetchone()[0]
+    owned = conn.execute(
+        "SELECT t.id, t.category_source, t.reconciliation_id,"
+        " (SELECT MIN(h.import_id) FROM import_rows h WHERE h.transaction_id = t.id AND h.import_id != ?) AS also_in"
+        " FROM transactions t WHERE t.import_id = ?",
+        (import_id, import_id),
+    ).fetchall()
+    kept = [item for item in owned if item["also_in"] is not None]
+    going = [item for item in owned if item["also_in"] is None]
+    reconciled = sum(1 for item in going if item["reconciliation_id"] is not None)
     if reconciled:
         raise BooksError(f"{reconciled} row(s) from import {import_id} are in a finished reconciliation. Reopen it first.")
-    manual = conn.execute(
-        "SELECT COUNT(*) FROM transactions WHERE import_id = ? AND category_source = 'manual'", (import_id,)
-    ).fetchone()[0]
+    manual = sum(1 for item in going if item["category_source"] == "manual")
     if manual and not force:
         raise BooksError(
             f"{manual} row(s) from import {import_id} were categorized by hand and that work would be lost. "
             "Pass --force to undo anyway."
         )
     with transaction(conn):
-        removed = conn.execute("DELETE FROM transactions WHERE import_id = ?", (import_id,)).rowcount
+        for item in kept:
+            conn.execute("UPDATE transactions SET import_id = ? WHERE id = ?", (item["also_in"], item["id"]))
+        for item in going:
+            conn.execute("DELETE FROM transactions WHERE id = ?", (item["id"],))
+        conn.execute("DELETE FROM import_rows WHERE import_id = ?", (import_id,))
         conn.execute("UPDATE imports SET undone_at = datetime('now') WHERE id = ?", (import_id,))
-    return {"removed": removed, "manual_lost": manual}
+    return {
+        "removed": len(going),
+        "kept": len(kept),
+        "kept_in": sorted({item["also_in"] for item in kept}),
+        "manual_lost": manual,
+    }

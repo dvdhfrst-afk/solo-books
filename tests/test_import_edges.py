@@ -200,14 +200,91 @@ class ChangedMapping(BooksCase):
         importer.import_export(self.conn, self.card, self.path, mapping=Mapping(invert_amount=True))
         self.assertEqual(ledger.balance_through(self.conn, self.card, date(2026, 12, 31)), -105000)
 
-    def test_later_file_can_come_back_after_an_earlier_undo(self) -> None:
-        plain = self.account(self.biz, "Plain")
-        early = self.write("a.csv", "Date,Description,Amount\n01/02/2026,A,-1.00\n")
-        later = self.write("b.csv", "Date,Description,Amount\n01/02/2026,A,-1.00\n01/03/2026,B,-2.00\n")
-        first = importer.import_export(self.conn, plain, early)
-        importer.import_export(self.conn, plain, later)
-        importer.undo_import(self.conn, first.import_id)
-        self.assertEqual(importer.import_export(self.conn, plain, later).rows_new, 1)
+
+
+class UndoWithOverlap(BooksCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.biz = self.business()
+        self.acct = self.account(self.biz, "Plain", opening=0)
+        self.early = self.write("a.csv", "Date,Description,Amount\n01/02/2026,A,-1.00\n01/02/2026,ONLY EARLY,-4.00\n")
+        self.later = self.write("b.csv", "Date,Description,Amount\n01/02/2026,A,-1.00\n01/03/2026,B,-2.00\n")
+
+    def _in_books(self) -> list:
+        return [row["description"] for row in self.conn.execute("SELECT description FROM transactions ORDER BY id")]
+
+    def _import(self, path) -> int:
+        return importer.import_export(self.conn, self.acct, path).import_id
+
+    def test_a_row_a_later_file_also_held_survives(self) -> None:
+        first, second = self._import(self.early), self._import(self.later)
+        outcome = importer.undo_import(self.conn, first)
+        self.assertEqual((outcome["removed"], outcome["kept"], outcome["kept_in"]), (1, 1, [second]))
+        self.assertEqual(self._in_books(), ["A", "B"])
+        self.assertEqual(ledger.balance_through(self.conn, self.acct, date(2026, 12, 31)), -300)
+
+    def test_undoing_the_later_file_leaves_the_earlier_files_rows(self) -> None:
+        first, second = self._import(self.early), self._import(self.later)
+        outcome = importer.undo_import(self.conn, second)
+        self.assertEqual((outcome["removed"], outcome["kept"]), (1, 0))
+        self.assertEqual(self._in_books(), ["A", "ONLY EARLY"])
+        self.assertEqual(importer.undo_import(self.conn, first)["removed"], 2)
+        self.assertEqual(self._in_books(), [])
+
+    def test_a_row_goes_when_the_last_file_holding_it_goes(self) -> None:
+        third = self.write("c.csv", "Date,Description,Amount\n01/02/2026,A,-1.00\n")
+        first, second, last = self._import(self.early), self._import(self.later), self._import(third)
+        self.assertEqual(importer.undo_import(self.conn, first)["kept_in"], [second])
+        self.assertEqual(importer.undo_import(self.conn, second)["kept_in"], [last])
+        self.assertEqual(self._in_books(), ["A"])
+        self.assertEqual(importer.undo_import(self.conn, last)["removed"], 1)
+        self.assertEqual(self._in_books(), [])
+
+    def test_a_kept_row_keeps_its_hand_booked_category_without_force(self) -> None:
+        first = self._import(self.early)
+        self._import(self.later)
+        row = self.conn.execute("SELECT id FROM transactions WHERE description = 'A'").fetchone()["id"]
+        ledger.categorize(self.conn, [row], self.category(self.biz, "6150"))
+        importer.undo_import(self.conn, first)
+        self.assertEqual(ledger.get_transaction(self.conn, row)["category_source"], "manual")
+
+    def test_a_kept_row_inside_a_finished_reconciliation_does_not_block(self) -> None:
+        only_a = self.write("c.csv", "Date,Description,Amount\n01/02/2026,A,-1.00\n")
+        first = self._import(only_a)
+        self._import(self.later)
+        report = reconcile.run(self.conn, self.acct, date(2026, 1, 1), date(2026, 1, 2), 0, -100)
+        reconcile.finish(self.conn, report.reconciliation["id"])
+        self.assertEqual(importer.undo_import(self.conn, first)["kept"], 1)
+        self.assertEqual(self._in_books(), ["A", "B"])
+
+    def test_row_matched_by_id_survives_too(self) -> None:
+        mapped = self.account(self.biz, "Ids", mapping=WITH_IDS)
+        early = self.write("d.csv", "Date,Description,Amount,Ref\n01/02/2026,A,-1.00,T1\n")
+        later = self.write("e.csv", "Date,Description,Amount,Ref\n01/03/2026,A POSTED,-1.00,T1\n")
+        first = importer.import_export(self.conn, mapped, early).import_id
+        importer.import_export(self.conn, mapped, later)
+        self.assertEqual(importer.undo_import(self.conn, first)["kept"], 1)
+
+    def test_a_dry_run_is_not_counted_as_holding_a_row(self) -> None:
+        first = self._import(self.early)
+        importer.import_export(self.conn, self.acct, self.later, dry_run=True)
+        self.assertEqual(importer.undo_import(self.conn, first)["removed"], 2)
+
+    def test_an_undone_file_can_go_back_in(self) -> None:
+        first = self._import(self.early)
+        self._import(self.later)
+        importer.undo_import(self.conn, first)
+        again = importer.import_export(self.conn, self.acct, self.early)
+        self.assertEqual((again.rows_new, again.rows_duplicate), (1, 1))
+        self.assertEqual(sorted(self._in_books()), ["A", "B", "ONLY EARLY"])
+
+    def test_the_command_says_what_stayed(self) -> None:
+        self.ok("account", "map", "Plain", "--date-col", "Date")
+        self.ok("import", "Plain", str(self.early))
+        self.ok("import", "Plain", str(self.later))
+        out = self.ok("imports", "undo", "1")
+        self.assertIn("Removed 1", out)
+        self.assertIn("Kept 1 row(s) that import(s) 2 also held", out)
 
 
 class CommandLineEdges(BooksCase):

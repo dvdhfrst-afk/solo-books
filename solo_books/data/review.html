@@ -179,7 +179,10 @@ function renderGroup(group, business) {
     book.disabled = transfer.disabled = true;
     try {
       const body = { ids, category: code };
-      if (makeRule.checked) body.rule_pattern = group.merchant;
+      if (makeRule.checked) {
+        body.rule_pattern = group.merchant;
+        body.unticked_ids = checks.filter((c) => !c.checked).map((c) => Number(c.dataset.id));
+      }
       const result = await post("/api/categorize", body);
       lastAction = { ids: result.ids, rule_id: result.rule_id };
       const total = result.booked + result.by_rule;

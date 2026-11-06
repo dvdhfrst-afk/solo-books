@@ -8,9 +8,9 @@ from typing import Callable, Dict, List, Optional, Sequence
 from .books import find_category, list_categories
 from .db import transaction
 from .errors import BooksError
-from .ledger import categorize, find_transactions
+from .ledger import categorize, find_transactions, get_transaction
 from .money import format_cents
-from .rules import add_rule, apply_rules
+from .rules import add_rule, apply_rules, hold_back
 
 
 @dataclass
@@ -46,12 +46,22 @@ def book_rows(
     transaction_ids: Sequence[int],
     category: sqlite3.Row,
     rule_pattern: Optional[str] = None,
+    held_back: Sequence[int] = (),
 ) -> dict:
-    """Book chosen rows. With a rule pattern, also make the rule and run it over the rest of the queue."""
+    """Book chosen rows. With a rule pattern, also make the rule and run it over the rest of the queue.
+
+    Rows in held_back stay in the queue, and the new rule will not book them later either.
+    """
+    if set(held_back) & set(transaction_ids):
+        raise BooksError("a row cannot be both booked and held back")
+    for transaction_id in held_back:
+        if get_transaction(conn, transaction_id)["business_id"] != business_id:
+            raise BooksError(f"transaction {transaction_id} belongs to another business")
     result = {"booked": 0, "by_rule": 0, "rule_id": None}
     with transaction(conn):
         if rule_pattern:
             result["rule_id"] = add_rule(conn, business_id, "contains", rule_pattern, category)
+            hold_back(conn, result["rule_id"], held_back)
             result["by_rule"] = apply_rules(conn, business_id)["categorized"]
         placeholders = ",".join("?" * len(transaction_ids))
         still_open = [

@@ -276,7 +276,8 @@ That usually means the column is a row number rather than a real id, and `accoun
 Importing a file again after changing its mapping stops too, because it would put new rows on top of the old ones. Run
 `imports undo ID` first.
 
-`imports undo ID` takes a whole file back out. `txn delete ID` removes one row and remembers it, so an overlapping
+`imports undo ID` takes back the rows only that file put in. A row another imported file also held stays, along with
+its category, and the output says how many stayed. `txn delete ID` removes one row and remembers it, so an overlapping
 export will not bring it back.
 
 ```bash

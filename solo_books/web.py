@@ -72,7 +72,10 @@ def categorize_request(conn, body: dict) -> dict:
     pattern = body.get("rule_pattern") or None
     if pattern is not None and not isinstance(pattern, str):
         raise BooksError("rule_pattern must be text")
-    result = book_rows(conn, business_id, ids, category, rule_pattern=pattern)
+    unticked = body.get("unticked_ids", [])
+    if not isinstance(unticked, list) or not all(isinstance(i, int) for i in unticked):
+        raise BooksError("unticked_ids must be a list of transaction numbers")
+    result = book_rows(conn, business_id, ids, category, rule_pattern=pattern, held_back=unticked)
     result["category"] = f"{category['code']} {category['name']}"
     result["ids"] = ids
     return result

@@ -7,7 +7,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Pattern
+from typing import Container, Dict, Iterable, List, Optional, Pattern
 
 from .books import find_category, get_account, require_usable
 from .db import transaction
@@ -77,10 +77,16 @@ def load_rules(conn: sqlite3.Connection, business_id: int) -> List[Rule]:
 
 
 def first_match(
-    rules: List[Rule], account_id: int, description: str, memo: str, merchant: str, amount_cents: int
+    rules: List[Rule],
+    account_id: int,
+    description: str,
+    memo: str,
+    merchant: str,
+    amount_cents: int,
+    skip: Container[int] = (),
 ) -> Optional[Rule]:
     for rule in rules:
-        if rule.matches(account_id, description, memo, merchant, amount_cents):
+        if rule.id not in skip and rule.matches(account_id, description, memo, merchant, amount_cents):
             return rule
     return None
 
@@ -121,6 +127,14 @@ def add_rule(
     return cursor.lastrowid
 
 
+def hold_back(conn: sqlite3.Connection, rule_id: int, transaction_ids: Iterable[int]) -> None:
+    """This rule never books these rows. A person can still book them by hand."""
+    conn.executemany(
+        "INSERT OR IGNORE INTO rule_exceptions (rule_id, transaction_id) VALUES (?, ?)",
+        [(rule_id, transaction_id) for transaction_id in transaction_ids],
+    )
+
+
 def list_rules(conn: sqlite3.Connection, business_id: int) -> List[sqlite3.Row]:
     return conn.execute(
         "SELECT r.*, c.code AS category_code, c.name AS category_name, a.name AS account_name,"
@@ -142,9 +156,16 @@ def delete_rule(conn: sqlite3.Connection, rule_id: int) -> None:
 def apply_rules(conn: sqlite3.Connection, business_id: int, recheck: bool = False) -> dict:
     """Run the rules over rows waiting for review; with recheck, over rule-booked rows as well.
 
-    Rows someone categorized by hand are never touched.
+    Rows someone categorized by hand are never touched, and neither are rows held back from a rule.
     """
     rules = load_rules(conn, business_id)
+    held_back: Dict[int, set] = {}
+    for exception in conn.execute(
+        "SELECT e.rule_id, e.transaction_id FROM rule_exceptions e JOIN rules r ON r.id = e.rule_id"
+        " WHERE r.business_id = ?",
+        (business_id,),
+    ):
+        held_back.setdefault(exception["transaction_id"], set()).add(exception["rule_id"])
     condition = "t.category_id IS NULL"
     if recheck:
         condition = "(t.category_id IS NULL OR t.category_source = 'rule')"
@@ -157,7 +178,15 @@ def apply_rules(conn: sqlite3.Connection, business_id: int, recheck: bool = Fals
     categorized = changed = cleared = 0
     with transaction(conn):
         for row in rows:
-            rule = first_match(rules, row["account_id"], row["description"], row["memo"], row["merchant"], row["amount_cents"])
+            rule = first_match(
+                rules,
+                row["account_id"],
+                row["description"],
+                row["memo"],
+                row["merchant"],
+                row["amount_cents"],
+                held_back.get(row["id"], ()),
+            )
             if rule is None:
                 if row["category_id"] is not None:
                     conn.execute(

@@ -89,6 +89,54 @@ class ReviewPage(BooksCase):
         self.assertEqual(len(review.queue(self.conn)), 4)
         self.assertGreaterEqual(undone["returned"], 3)
 
+    def test_unticked_row_stays_unbooked_when_a_rule_is_made(self) -> None:
+        unshown = ledger.add_manual(self.conn, self.acct, date(2025, 1, 9), -700, "BLUE FERN CAFE 0109")
+        status, result = self.post(
+            "/api/categorize",
+            {"ids": [self.first], "category": "6150", "rule_pattern": "BLUE FERN CAFE", "unticked_ids": [self.second]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["by_rule"], 2)
+        self.assertIsNone(ledger.get_transaction(self.conn, self.second)["category_id"])
+        self.assertEqual(ledger.get_transaction(self.conn, unshown)["category_source"], "rule")
+
+    def test_unticked_row_stays_unbooked_through_later_rule_runs(self) -> None:
+        self.post(
+            "/api/categorize",
+            {"ids": [self.first], "category": "6150", "rule_pattern": "BLUE FERN CAFE", "unticked_ids": [self.second]},
+        )
+        # Every way the rules run again over the queue.
+        self.post("/api/categorize", {"ids": [self.third], "category": "3900", "rule_pattern": "EXAMPLE CARD"})
+        self.ok("rules", "apply", "--business", "Business A")
+        self.ok("rules", "apply", "--business", "Business A", "--recheck")
+        self.ok("rules", "add", "--business", "Business A", "--contains", "NOTHING ELSE", "--category", "6150")
+        self.assertIsNone(ledger.get_transaction(self.conn, self.second)["category_id"])
+        # It is still the person's to book by hand.
+        self.assertEqual(self.post("/api/categorize", {"ids": [self.second], "category": "6150"})[1]["booked"], 1)
+
+    def test_undoing_the_rule_forgets_what_it_held_back(self) -> None:
+        _, result = self.post(
+            "/api/categorize",
+            {"ids": [self.first], "category": "6150", "rule_pattern": "BLUE FERN CAFE", "unticked_ids": [self.second]},
+        )
+        self.post("/api/undo", {"ids": result["ids"], "rule_id": result["rule_id"]})
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM rule_exceptions").fetchone()[0], 0)
+        _, again = self.post("/api/categorize", {"ids": [self.first], "category": "6150", "rule_pattern": "BLUE FERN CAFE"})
+        self.assertEqual(again["by_rule"], 2)
+
+    def test_bad_unticked_rows_are_refused_and_change_nothing(self) -> None:
+        other = self.account(self.business("Business B"), "B Bank")
+        foreign = ledger.add_manual(self.conn, other, date(2025, 1, 5), -100, "BLUE FERN CAFE")
+        base = {"ids": [self.first], "category": "6150", "rule_pattern": "BLUE FERN CAFE"}
+        for unticked in ("all", [self.first], [99999], [foreign]):
+            self.assertEqual(self.post("/api/categorize", dict(base, unticked_ids=unticked))[0], 400)
+        self.assertEqual(rules.list_rules(self.conn, self.biz["id"]), [])
+        self.assertEqual(len(review.queue(self.conn)), 4)
+
+    def test_the_page_sends_the_unticked_rows(self) -> None:
+        _, page, _ = self.request("GET", "/")
+        self.assertIn(b"unticked_ids", page)
+
     def test_post_needs_the_page_token(self) -> None:
         body = {"ids": [self.first], "category": "6150"}
         self.assertEqual(self.post("/api/categorize", body, token="wrong")[0], 403)
