@@ -100,7 +100,7 @@ label.rule { display: inline-flex; gap: 6px; align-items: center; font-size: 14p
 <div id="status" role="status" aria-live="polite"><span id="status-text"></span><button id="undo" type="button">Undo</button></div>
 <script nonce="__NONCE__">
 "use strict";
-const TOKEN = "__TOKEN__";
+const RUN_TOKEN = "__TOKEN__";
 const ROWS_SHOWN = 5;
 let state = null;
 let lastAction = null;
@@ -115,7 +115,7 @@ const el = (tag, props, ...kids) => {
 async function post(path, body) {
   const response = await fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Solo-Books-Token": TOKEN },
+    headers: { "Content-Type": "application/json", "X-Solo-Books-Token": RUN_TOKEN },
     body: JSON.stringify(body),
   });
   const data = await response.json();
