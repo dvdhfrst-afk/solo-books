@@ -217,7 +217,7 @@
    "group": "Travel and meals",
    "key": "meals",
    "accepts": "expense",
-   "note": "Shows the full amount booked. The form instructions limit what is deductible; the preparer applies that limit."
+   "note": "Shows the full amount booked, and lines 28, 29 and 31 include all of it. The form instructions limit what is deductible; the preparer applies that limit."
   },
   {
    "line": "25",

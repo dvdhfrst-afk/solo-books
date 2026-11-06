@@ -81,6 +81,7 @@ def run(
     printed_begin: int,
     printed_end: int,
     statement_file: Optional[Path] = None,
+    skip_bad: bool = False,
 ) -> ReconcileReport:
     """Record the statement's figures for a period and compare the books to them.
 
@@ -111,11 +112,11 @@ def run(
         "SELECT * FROM reconciliations WHERE account_id = ? AND period_start = ? AND period_end = ?",
         (account["id"], start.isoformat(), end.isoformat()),
     ).fetchone()
-    return compute(conn, recon, statement_file)
+    return compute(conn, recon, statement_file, skip_bad)
 
 
 def compute(
-    conn: sqlite3.Connection, recon: sqlite3.Row, statement_file: Optional[Path] = None
+    conn: sqlite3.Connection, recon: sqlite3.Row, statement_file: Optional[Path] = None, skip_bad: bool = False
 ) -> ReconcileReport:
     account = _account_of(conn, recon)
     start, end = parse_iso_date(recon["period_start"]), parse_iso_date(recon["period_end"])
@@ -141,7 +142,7 @@ def compute(
     if report.difference != 0:
         _explain_difference(conn, account, report, rows, statement_file is not None)
     if statement_file is not None:
-        _compare_statement(account, report, rows, Path(statement_file))
+        _compare_statement(account, report, rows, Path(statement_file), skip_bad)
     if recon["status"] == "finished":
         report.rows_added_after_finish = [row for row in rows if row["reconciliation_id"] is None]
     return report
@@ -230,12 +231,17 @@ def _describe(row: sqlite3.Row) -> str:
 
 
 def _compare_statement(
-    account: sqlite3.Row, report: ReconcileReport, rows: List[sqlite3.Row], path: Path
+    account: sqlite3.Row, report: ReconcileReport, rows: List[sqlite3.Row], path: Path, skip_bad: bool = False
 ) -> None:
     """Pair statement lines with book rows: same day and amount, then near day, then changed amount."""
     parsed = parse_export(path, account_mapping(account))
-    if parsed.errors:
-        raise BooksError(f"{path.name}: cannot compare, unreadable rows:\n  " + "\n  ".join(parsed.errors[:20]))
+    if parsed.errors and not skip_bad:
+        raise BooksError(
+            f"{path.name}: cannot compare, unreadable rows:\n  " + "\n  ".join(parsed.errors[:20])
+            + "\nFix the file, or pass --skip-bad to compare the readable rows."
+        )
+    for error in parsed.errors:
+        report.notes.append(f"Statement file, left out of the comparison: {error}")
     report.compared_statement = True
     statement = []
     for line in parsed.rows:

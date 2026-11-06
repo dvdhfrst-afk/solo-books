@@ -63,6 +63,7 @@ MIGRATIONS = [
         rows_new        INTEGER NOT NULL,
         rows_duplicate  INTEGER NOT NULL,
         rows_skipped    INTEGER NOT NULL,
+        mapping_json    TEXT NOT NULL,
         undone_at       TEXT
     );
 
@@ -95,7 +96,8 @@ MIGRATIONS = [
 
     -- amount_cents is signed from the account's point of view: positive puts money in
     -- (or pays down a card), negative takes money out (or adds to what a card is owed).
-    -- dedupe_key plus occurrence identify a bank row across overlapping exports.
+    -- dedupe_key plus occurrence identify a bank row across overlapping exports. natural_key is
+    -- the date, amount and text, which still matches when a bank id is added or dropped later.
     CREATE TABLE transactions (
         id                 INTEGER PRIMARY KEY,
         account_id         INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -106,6 +108,7 @@ MIGRATIONS = [
         reference          TEXT NOT NULL DEFAULT '',
         merchant           TEXT NOT NULL,
         dedupe_key         TEXT NOT NULL,
+        natural_key        TEXT NOT NULL,
         occurrence         INTEGER NOT NULL,
         import_id          INTEGER REFERENCES imports(id) ON DELETE SET NULL,
         category_id        INTEGER REFERENCES categories(id),
@@ -118,11 +121,13 @@ MIGRATIONS = [
     );
     CREATE INDEX transactions_by_date ON transactions (account_id, posted_on);
     CREATE INDEX transactions_by_category ON transactions (category_id, posted_on);
+    CREATE INDEX transactions_by_natural_key ON transactions (account_id, natural_key);
 
     -- Bank rows someone deleted on purpose, so a later overlapping export does not bring them back.
     CREATE TABLE deleted_rows (
         account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         dedupe_key  TEXT NOT NULL,
+        natural_key TEXT NOT NULL,
         occurrence  INTEGER NOT NULL,
         deleted_at  TEXT NOT NULL DEFAULT (datetime('now')),
         PRIMARY KEY (account_id, dedupe_key, occurrence)

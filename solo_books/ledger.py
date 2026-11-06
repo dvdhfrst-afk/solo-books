@@ -22,14 +22,27 @@ _SELECT = (
 )
 
 
-def dedupe_key(posted_on: date, amount_cents: int, description: str, reference: str = "") -> str:
-    """What makes a bank row the same row in a later export.
+def natural_key(posted_on: date, amount_cents: int, description: str) -> str:
+    """A row's date, amount and text, ignoring case and spacing."""
+    return f"{posted_on.isoformat()}|{amount_cents}|{normalize_description(description)}"
 
-    A bank's own row id wins when the mapping has one; descriptions can change between exports.
-    """
-    if reference.strip():
-        return f"ref:{reference.strip()}"
-    return f"row:{posted_on.isoformat()}|{amount_cents}|{normalize_description(description)}"
+
+def reference_key(reference: str) -> str:
+    return f"ref:{reference.strip()}"
+
+
+def plain_key(natural: str) -> str:
+    return f"row:{natural}"
+
+
+def finished_reconciliation_on(conn: sqlite3.Connection, account_id: int, day: date) -> Optional[int]:
+    """The finished reconciliation whose period holds this day, if any."""
+    row = conn.execute(
+        "SELECT id FROM reconciliations WHERE account_id = ? AND status = 'finished'"
+        " AND period_start <= ? AND period_end >= ?",
+        (account_id, day.isoformat(), day.isoformat()),
+    ).fetchone()
+    return row["id"] if row else None
 
 
 def get_transaction(conn: sqlite3.Connection, transaction_id: int) -> sqlite3.Row:
@@ -93,7 +106,8 @@ def add_manual(
         raise BooksError("a transaction needs a description")
     if category is not None:
         _check_category(account["business_id"], category)
-    key = dedupe_key(posted_on, amount_cents, description)
+    natural = natural_key(posted_on, amount_cents, description)
+    key = plain_key(natural)
     with transaction(conn):
         taken = conn.execute(
             "SELECT COALESCE(MAX(occurrence), 0) FROM transactions WHERE account_id = ? AND dedupe_key = ?",
@@ -101,7 +115,7 @@ def add_manual(
         ).fetchone()[0]
         cursor = conn.execute(
             "INSERT INTO transactions (account_id, posted_on, amount_cents, description, merchant, dedupe_key,"
-            " occurrence, category_id, category_source, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " natural_key, occurrence, category_id, category_source, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 account["id"],
                 posted_on.isoformat(),
@@ -109,6 +123,7 @@ def add_manual(
                 description.strip(),
                 merchant_key(description),
                 key,
+                natural,
                 taken + 1,
                 category["id"] if category is not None else None,
                 "manual" if category is not None else None,
@@ -130,8 +145,8 @@ def delete_transaction(conn: sqlite3.Connection, transaction_id: int) -> None:
         conn.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
         if row["import_id"] is not None:
             conn.execute(
-                "INSERT OR IGNORE INTO deleted_rows (account_id, dedupe_key, occurrence) VALUES (?, ?, ?)",
-                (row["account_id"], row["dedupe_key"], row["occurrence"]),
+                "INSERT OR IGNORE INTO deleted_rows (account_id, dedupe_key, natural_key, occurrence) VALUES (?, ?, ?, ?)",
+                (row["account_id"], row["dedupe_key"], row["natural_key"], row["occurrence"]),
             )
 
 

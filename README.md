@@ -261,12 +261,20 @@ You can set any of these with flags instead, such as `--date-col "Post Date"` or
 ### What happens on import
 
 A file goes in whole or not at all. If a row cannot be read, nothing is saved and the error lists every bad line.
-`--skip-bad` imports the rest. Pending rows, zero amounts and footers such as "Total" are skipped and counted.
+`--skip-bad` imports the rest. Pending rows, zero amounts and summary lines such as "Total" or "Ending balance" are
+skipped and counted. A row with more fields than the header is a bad line, because an amount like 1,064.33 with no
+quotes around it would otherwise be misread.
 
-A row is the same row in a later export if it has the same bank id, or, with no id, the same date, amount and text
-(ignoring case and spacing). Two identical rows on one day stay two rows, because two coffees are real, and
-importing the file again still leaves two. You get a warning about them, and another if a new row looks like an old
-one with reworded text, since that is your call rather than the program's.
+A row is the same row in a later export if it has the same bank id, or the same date, amount and text (ignoring case
+and spacing). Two identical rows on one day stay two rows, because two coffees are real, and importing the file again
+still leaves two. You get a warning about them, and another if a new row looks like an old one with reworded text,
+since that is your call rather than the program's.
+
+If a bank id shows up with a different amount, or a date more than a week away, the import stops and shows both rows.
+That usually means the column is a row number rather than a real id, and `account map NAME --no-reference-col` drops it.
+
+Importing a file again after changing its mapping stops too, because it would put new rows on top of the old ones. Run
+`imports undo ID` first.
 
 `imports undo ID` takes a whole file back out. `txn delete ID` removes one row and remembers it, so an overlapping
 export will not bring it back.
@@ -360,8 +368,8 @@ business and then all of them side by side. Add `--format csv -o FILE` for a fil
 `solo_books/data/schedule_c_<year>.json` with the source URL, the form revision and the date retrieved. Every report
 prints that stamp. It leaves some things to your preparer:
 
-- Line 24b shows the full amount booked to meals. The form's instructions limit what is deductible, and your preparer
-  applies that limit.
+- Line 24b shows the full amount booked to meals, and lines 28, 29 and 31 include all of it. The form's instructions
+  limit what is deductible, and your preparer applies that limit.
 - Lines 13 and 30 are usually worked out from asset and home records, not bank rows.
 - It does not fill in the form or compute any tax. No tax rates appear in this code.
 

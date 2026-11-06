@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-import json
+import re
 import sqlite3
 import sys
 import webbrowser
@@ -120,10 +120,14 @@ def _mapping_from_args(args, base: Optional[Mapping] = None) -> Optional[Mapping
         "encoding": args.encoding,
     }
     overrides = {name: value for name, value in overrides.items() if value is not None}
+    if args.reference_col is not None and args.no_reference_col:
+        raise BooksError("give --reference-col or --no-reference-col, not both")
     if args.invert_amount:
         overrides["invert_amount"] = True
     if args.no_invert_amount:
         overrides["invert_amount"] = False
+    if args.no_reference_col:
+        overrides["reference_column"] = None
     if not args.mapping and not overrides:
         return None
     mapping = Mapping.from_file(Path(args.mapping)) if args.mapping else (base or Mapping())
@@ -264,6 +268,8 @@ def _print_import(result: importer.ImportResult) -> None:
     print(f"  waiting for review: {result.waiting_for_review}")
     for line in result.bad_rows[:20]:
         print(f"  BAD {line}")
+    if result.dry_run and result.bad_rows:
+        print("A real import stops on these rows and saves nothing, unless you pass --skip-bad.")
     if result.dry_run and result.samples:
         print("How the first rows read (positive is money in):")
         rows = [[str(r.posted_on), format_cents(r.amount_cents), r.description] for r in result.samples]
@@ -301,6 +307,7 @@ def cmd_imports_list(args, conn) -> int:
 def cmd_imports_undo(args, conn) -> int:
     outcome = importer.undo_import(conn, args.id, force=args.force)
     print(f"Removed {outcome['removed']} row(s) from import {args.id}.")
+    print("Any of them that a later file also held are gone too. Import that file again to bring them back.")
     return 0
 
 
@@ -398,6 +405,8 @@ def cmd_rules_test(args, conn) -> int:
     print(f"Merchant reads as: {merchant_key(args.description)}")
     if rule is None:
         print("No rule matches. This row would wait in the review queue.")
+        if not args.amount:
+            print("Tested as 1.00 of money out. Rules limited by direction or size need --amount.")
         return 1
     category = conn.execute("SELECT * FROM categories WHERE id = ?", (rule.category_id,)).fetchone()
     print(f"Rule {rule.id} ({rule.match_type} {rule.pattern!r}) books it to {category['code']} {category['name']}.")
@@ -520,6 +529,9 @@ def cmd_txn_add(args, conn) -> int:
         conn, account, parse_iso_date(args.date), parse_cents(args.amount), args.description, category, args.note or ""
     )
     print(f"Added transaction {transaction_id}.")
+    finished = ledger.finished_reconciliation_on(conn, account["id"], parse_iso_date(args.date))
+    if finished:
+        print(f"WARNING: this date is inside finished reconciliation {finished}, so that period no longer ties.")
     return 0
 
 
@@ -548,13 +560,16 @@ def cmd_reconcile_run(args, conn) -> int:
         parse_cents(args.begin),
         parse_cents(args.finish),
         Path(args.statement) if args.statement else None,
+        args.skip_bad,
     )
     print(render.reconcile_text(report))
     return 0 if report.balanced else 1
 
 
 def cmd_reconcile_show(args, conn) -> int:
-    report = reconcile.compute(conn, reconcile.get(conn, args.id), Path(args.statement) if args.statement else None)
+    report = reconcile.compute(
+        conn, reconcile.get(conn, args.id), Path(args.statement) if args.statement else None, args.skip_bad
+    )
     print(render.reconcile_text(report))
     return 0 if report.balanced else 1
 
@@ -760,6 +775,7 @@ def _add_mapping_flags(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--credit-col")
     group.add_argument("--memo-col")
     group.add_argument("--reference-col", help="column holding the bank's own unique row id")
+    group.add_argument("--no-reference-col", action="store_true", help="stop treating any column as a unique row id")
     group.add_argument("--status-col", help="rows whose status is 'pending' are skipped")
     group.add_argument("--skip-lines", type=int, help="lines before the header row")
     group.add_argument("--delimiter")
@@ -940,9 +956,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--begin", required=True, help="beginning balance as printed; on a card, what was owed")
     p.add_argument("--end", dest="finish", required=True, help="ending balance as printed; on a card, what was owed")
     p.add_argument("--statement", help="CSV of the statement's lines, compared line by line")
+    p.add_argument("--skip-bad", action="store_true", help="compare the readable statement rows even if some are not")
     p = add(rec, "show", cmd_reconcile_show, "show a reconciliation again")
     p.add_argument("id", type=int)
     p.add_argument("--statement", help="CSV of the statement's lines, compared line by line")
+    p.add_argument("--skip-bad", action="store_true", help="compare the readable statement rows even if some are not")
     p = add(rec, "finish", cmd_reconcile_finish, "lock a period that ties to the cent")
     p.add_argument("id", type=int)
     p = add(rec, "reopen", cmd_reconcile_reopen, "unlock the latest finished period")
@@ -986,12 +1004,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_NEGATIVE_AMOUNT = re.compile(r"^-\$?[\d,]*\.?\d*$")
+
+
+def _attach_negative_amounts(argv: List[str]) -> List[str]:
+    """Let --amount -1,234.50 work. argparse alone takes that value for an unknown flag."""
+    result: List[str] = []
+    for arg in argv:
+        if result and result[-1].startswith("--") and "=" not in result[-1] and _NEGATIVE_AMOUNT.match(arg) and arg != "-":
+            result[-1] = f"{result[-1]}={arg}"
+        else:
+            result.append(arg)
+    return result
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(_attach_negative_amounts(sys.argv[1:] if argv is None else list(argv)))
     if not hasattr(args, "db"):
         args.db = None
     try:

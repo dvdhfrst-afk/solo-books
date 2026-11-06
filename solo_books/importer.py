@@ -7,17 +7,19 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .csvmap import Mapping, ParsedRow, parse_export
 from .db import transaction
 from .errors import BooksError
-from .ledger import dedupe_key
+from .ledger import finished_reconciliation_on, natural_key, plain_key, reference_key
 from .money import format_cents
 from .rules import first_match, load_rules
 from .text import merchant_key
 
 _NEAR_DUPLICATE_DAYS = 3
+# A bank can move a pending row's date by a few days and still call it the same row.
+_SAME_ID_DAYS = 7
 _MAX_ERRORS_SHOWN = 20
 
 
@@ -40,6 +42,7 @@ class ImportResult:
     samples: List[ParsedRow] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     bad_rows: List[str] = field(default_factory=list)
+    conflicts: List[str] = field(default_factory=list)
 
 
 class _DryRun(Exception):
@@ -88,7 +91,8 @@ def import_export(
 
     sha = hashlib.sha256(path.read_bytes()).hexdigest()
     earlier = conn.execute(
-        "SELECT id, imported_at FROM imports WHERE account_id = ? AND file_sha256 = ? AND undone_at IS NULL",
+        "SELECT id, imported_at, mapping_json FROM imports WHERE account_id = ? AND file_sha256 = ? AND undone_at IS NULL"
+        " ORDER BY id DESC",
         (account["id"], sha),
     ).fetchone()
     if earlier:
@@ -96,7 +100,9 @@ def import_export(
 
     try:
         with transaction(conn):
-            _insert_rows(conn, account, path.name, sha, parsed.rows, result)
+            _insert_rows(conn, account, path.name, sha, mapping.to_json(), parsed.rows, result)
+            _settle_conflicts(path.name, result, stop=not (dry_run or skip_bad))
+            _check_remapped_file(earlier, mapping.to_json(), result, stop=not dry_run)
             if dry_run:
                 raise _DryRun
     except _DryRun:
@@ -106,44 +112,146 @@ def import_export(
     return result
 
 
+class _RowMatcher:
+    """Decides whether each row of a file is already in the books.
+
+    A row that carries a bank id is matched by that id, then by date, amount and text among rows
+    that have no id yet (one added by hand, or imported before the mapping named an id column).
+    A row with no id is matched by date, amount and text against every row. Each existing row can
+    only be claimed once, so two identical purchases in a file need two rows in the books.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, account_id: int) -> None:
+        self.conn = conn
+        self.account_id = account_id
+        self.claimed: set = set()
+        self.seen_ids: Counter = Counter()
+        self._existing: Dict[str, List[sqlite3.Row]] = {}
+        self._deleted: Dict[str, List[str]] = {}
+
+    def _existing_for(self, natural: str) -> List[sqlite3.Row]:
+        # Read once per key, before this file adds anything, so a file cannot match its own rows.
+        if natural not in self._existing:
+            self._existing[natural] = self.conn.execute(
+                "SELECT id, dedupe_key FROM transactions WHERE account_id = ? AND natural_key = ? ORDER BY id",
+                (self.account_id, natural),
+            ).fetchall()
+        return self._existing[natural]
+
+    def _deleted_for(self, natural: str) -> List[str]:
+        if natural not in self._deleted:
+            self._deleted[natural] = [
+                row["dedupe_key"]
+                for row in self.conn.execute(
+                    "SELECT dedupe_key FROM deleted_rows WHERE account_id = ? AND natural_key = ?",
+                    (self.account_id, natural),
+                )
+            ]
+        return self._deleted[natural]
+
+    def _claim(self, natural: str, only_without_id: bool) -> Optional[int]:
+        for row in self._existing_for(natural):
+            if row["id"] in self.claimed:
+                continue
+            if only_without_id and not row["dedupe_key"].startswith("row:"):
+                continue
+            self.claimed.add(row["id"])
+            return row["id"]
+        return None
+
+    def classify(self, row: ParsedRow) -> Tuple[str, str, int, str]:
+        """Returns (verdict, dedupe key, occurrence, detail). Verdicts are new, duplicate, deleted, conflict."""
+        natural = natural_key(row.posted_on, row.amount_cents, row.description)
+        if not row.reference:
+            key = plain_key(natural)
+            if self._claim(natural, only_without_id=False) is not None:
+                return "duplicate", key, 0, ""
+            if self._deleted_for(natural):
+                self._deleted_for(natural).pop()
+                return "deleted", key, 0, ""
+            taken = self.conn.execute(
+                "SELECT COALESCE(MAX(occurrence), 0) FROM transactions WHERE account_id = ? AND dedupe_key = ?",
+                (self.account_id, key),
+            ).fetchone()[0]
+            return "new", key, taken + 1, ""
+
+        key = reference_key(row.reference)
+        self.seen_ids[key] += 1
+        occurrence = self.seen_ids[key]
+        if self.conn.execute(
+            "SELECT 1 FROM deleted_rows WHERE account_id = ? AND dedupe_key = ? AND occurrence = ?",
+            (self.account_id, key, occurrence),
+        ).fetchone():
+            return "deleted", key, occurrence, ""
+        holder = self.conn.execute(
+            "SELECT id, posted_on, amount_cents, description FROM transactions"
+            " WHERE account_id = ? AND dedupe_key = ? AND occurrence = ?",
+            (self.account_id, key, occurrence),
+        ).fetchone()
+        if holder is not None:
+            self.claimed.add(holder["id"])
+            days_apart = abs((date.fromisoformat(holder["posted_on"]) - row.posted_on).days)
+            if holder["amount_cents"] == row.amount_cents and days_apart <= _SAME_ID_DAYS:
+                return "duplicate", key, occurrence, ""
+            return (
+                "conflict",
+                key,
+                occurrence,
+                f"line {row.line}: id {row.reference!r} is already on transaction {holder['id']} "
+                f"({holder['posted_on']}, {format_cents(holder['amount_cents'])}, {holder['description']!r}), "
+                f"but this row reads {row.posted_on}, {format_cents(row.amount_cents)}, {row.description!r}",
+            )
+        without_id = self._claim(natural, only_without_id=True)
+        if without_id is not None:
+            # The row is already here; from now on the bank's id identifies it.
+            self.conn.execute(
+                "UPDATE transactions SET dedupe_key = ?, occurrence = ?, reference = ? WHERE id = ?",
+                (key, occurrence, row.reference, without_id),
+            )
+            return "duplicate", key, occurrence, ""
+        deleted = self._deleted_for(natural)
+        for index, deleted_key in enumerate(deleted):
+            if deleted_key.startswith("row:"):
+                del deleted[index]
+                return "deleted", key, occurrence, ""
+        return "new", key, occurrence, ""
+
+
 def _insert_rows(
     conn: sqlite3.Connection,
     account: sqlite3.Row,
     file_name: str,
     sha: str,
+    mapping_json: str,
     rows: List[ParsedRow],
     result: ImportResult,
 ) -> None:
     cursor = conn.execute(
-        "INSERT INTO imports (account_id, file_name, file_sha256, rows_read, rows_new, rows_duplicate, rows_skipped)"
-        " VALUES (?, ?, ?, ?, 0, 0, ?)",
-        (account["id"], file_name, sha, result.rows_read, result.rows_skipped),
+        "INSERT INTO imports (account_id, file_name, file_sha256, rows_read, rows_new, rows_duplicate, rows_skipped,"
+        " mapping_json) VALUES (?, ?, ?, ?, 0, 0, ?, ?)",
+        (account["id"], file_name, sha, result.rows_read, result.rows_skipped, mapping_json),
     )
     import_id = cursor.lastrowid
     result.import_id = import_id
     rules = load_rules(conn, account["business_id"])
+    matcher = _RowMatcher(conn, account["id"])
 
-    # Two identical rows on one day in one file are two real purchases. They are told apart by
-    # counting, so a later export holding the same two rows matches them and adds nothing.
-    seen: Counter = Counter()
-    repeated: Counter = Counter()
+    # Two identical rows on one day in one file are two real purchases: each needs its own row
+    # in the books, so a later export holding the same two matches them and adds nothing.
+    repeats: Counter = Counter()
     for row in rows:
-        key = dedupe_key(row.posted_on, row.amount_cents, row.description, row.reference)
-        seen[key] += 1
-        occurrence = seen[key]
-        if occurrence > 1:
-            repeated[key] = occurrence
-        if conn.execute(
-            "SELECT 1 FROM transactions WHERE account_id = ? AND dedupe_key = ? AND occurrence = ?",
-            (account["id"], key, occurrence),
-        ).fetchone():
+        natural = natural_key(row.posted_on, row.amount_cents, row.description)
+        if not row.reference:
+            repeats[natural] += 1
+        verdict, key, occurrence, detail = matcher.classify(row)
+        if verdict == "duplicate":
             result.rows_duplicate += 1
             continue
-        if conn.execute(
-            "SELECT 1 FROM deleted_rows WHERE account_id = ? AND dedupe_key = ? AND occurrence = ?",
-            (account["id"], key, occurrence),
-        ).fetchone():
+        if verdict == "deleted":
             result.rows_deleted_before += 1
+            continue
+        if verdict == "conflict":
+            result.conflicts.append(detail)
             continue
 
         merchant = merchant_key(row.description)
@@ -151,8 +259,8 @@ def _insert_rows(
         _warn_near_duplicate(conn, account, row, key, result)
         conn.execute(
             "INSERT INTO transactions (account_id, posted_on, amount_cents, description, memo, reference, merchant,"
-            " dedupe_key, occurrence, import_id, category_id, category_source, rule_id)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " dedupe_key, natural_key, occurrence, import_id, category_id, category_source, rule_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 account["id"],
                 row.posted_on.isoformat(),
@@ -162,6 +270,7 @@ def _insert_rows(
                 row.reference,
                 merchant,
                 key,
+                natural,
                 occurrence,
                 import_id,
                 rule.category_id if rule else None,
@@ -180,12 +289,42 @@ def _insert_rows(
         "UPDATE imports SET rows_new = ?, rows_duplicate = ? WHERE id = ?",
         (result.rows_new, result.rows_duplicate, import_id),
     )
-    if repeated:
-        total = sum(repeated.values())
+    total = sum(count for count in repeats.values() if count > 1)
+    if total:
         result.warnings.append(
             f"{total} rows in this file repeat another row on the same day with the same amount and text. "
             "They were kept as separate purchases. If one is a mistake, remove it with 'txn delete'."
         )
+
+
+def _settle_conflicts(file_name: str, result: ImportResult, stop: bool) -> None:
+    """A reused id must not swallow a different row, and must not double a corrected one. A person decides."""
+    if not result.conflicts:
+        return
+    if stop:
+        shown = "\n  ".join(result.conflicts[:_MAX_ERRORS_SHOWN])
+        raise BooksError(
+            f"{file_name}: {len(result.conflicts)} row(s) reuse a bank id with a different date or amount. "
+            f"Nothing was imported.\n  {shown}\n"
+            "If this column is not a unique id (a row number, say), drop it with 'account map NAME --no-reference-col'. "
+            "If the bank really changed the row, pass --skip-bad and correct it by hand."
+        )
+    result.bad_rows.extend(result.conflicts)
+    result.rows_bad += len(result.conflicts)
+
+
+def _check_remapped_file(earlier: Optional[sqlite3.Row], mapping_json: str, result: ImportResult, stop: bool) -> None:
+    """The same file read a new way would stack new rows on the old ones, such as both signs of each amount."""
+    if earlier is None or not result.rows_new or earlier["mapping_json"] == mapping_json:
+        return
+    message = (
+        f"This exact file is already in the books as import {earlier['id']}, read with a different mapping, "
+        f"so {result.rows_new} row(s) would go in on top of the old ones. "
+        f"Take the old ones out first with 'imports undo {earlier['id']}'."
+    )
+    if stop:
+        raise BooksError(message)
+    result.warnings.append(message)
 
 
 def _warn_near_duplicate(
@@ -208,15 +347,11 @@ def _warn_near_duplicate(
 
 
 def _warn_inside_finished(conn: sqlite3.Connection, account: sqlite3.Row, row: ParsedRow, result: ImportResult) -> None:
-    hit = conn.execute(
-        "SELECT id FROM reconciliations WHERE account_id = ? AND status = 'finished'"
-        " AND period_start <= ? AND period_end >= ?",
-        (account["id"], row.posted_on.isoformat(), row.posted_on.isoformat()),
-    ).fetchone()
+    hit = finished_reconciliation_on(conn, account["id"], row.posted_on)
     if hit:
         result.warnings.append(
             f"New row {row.posted_on} {format_cents(row.amount_cents)} {row.description!r} falls inside "
-            f"finished reconciliation {hit['id']}, so that period no longer ties. Check it with 'reconcile show {hit['id']}'."
+            f"finished reconciliation {hit}, so that period no longer ties. Check it with 'reconcile show {hit}'."
         )
 
 
@@ -228,11 +363,13 @@ def _sign_warning(account: sqlite3.Row, rows: List[ParsedRow], result: ImportRes
     if account["kind"] == "credit_card" and money_in * 2 > len(rows):
         result.warnings.append(
             f"{money_in} of {len(rows)} rows read as money in, which is unusual for a card. "
-            "If charges are positive in this export, set invert_amount to true in the mapping."
+            "If charges are positive in this export, set invert_amount to true in the mapping. "
+            "If this file is already imported, take it out first with 'imports undo ID'."
         )
     if account["kind"] in ("checking", "savings") and money_in == len(rows):
         result.warnings.append(
-            "Every row reads as money in. If withdrawals are positive in this export, fix the mapping."
+            "Every row reads as money in. If withdrawals are positive in this export, fix the mapping. "
+            "If this file is already imported, take it out first with 'imports undo ID'."
         )
 
 

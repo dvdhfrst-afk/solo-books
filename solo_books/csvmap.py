@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -27,6 +28,21 @@ _FIELDS = (
     "skip_lines",
     "delimiter",
     "encoding",
+)
+
+# A label in place of a date marks a summary line, whatever figures follow it.
+_SUMMARY_LABEL = re.compile(
+    r"^((sub|grand |statement |account |period |page )?totals?\b"
+    r"|(beginning|ending|opening|closing|starting|available|current|previous|new|statement|account) balance\b"
+    r"|balance\b|end of\b|number of\b)",
+    re.IGNORECASE,
+)
+# Some banks date their balance lines. These are the whole description, so TOTAL WINE stays a purchase.
+_DATED_BALANCE_LINE = re.compile(
+    r"^((sub|grand |statement |account |period )?totals?"
+    r"|(beginning|ending|opening|closing|starting|available|current|previous|new|statement|account) balance"
+    r"|balance (forward|brought forward|carried forward))$",
+    re.IGNORECASE,
 )
 
 _DATE_FORMATS = ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y", "%m-%d-%Y", "%d/%m/%Y", "%b %d, %Y", "%d %b %Y")
@@ -66,6 +82,13 @@ class Mapping:
             raise BooksError("skip_lines must be a whole number, zero or more")
         if not isinstance(self.skip_statuses, list):
             raise BooksError("skip_statuses must be a list")
+        if not isinstance(self.invert_amount, bool):
+            raise BooksError("invert_amount must be true or false, without quotes")
+        for name in _FIELDS:
+            if name.endswith(("_column", "_format")) or name in ("delimiter", "encoding"):
+                value = getattr(self, name)
+                if value is not None and not isinstance(value, str):
+                    raise BooksError(f"{name} must be text")
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=1)
@@ -153,6 +176,13 @@ def _column(index: Dict[str, int], name: Optional[str], header: List[str], path:
     return position
 
 
+def _without_trailing_blanks(row: List[str]) -> List[str]:
+    end = len(row)
+    while end and not row[end - 1].strip():
+        end -= 1
+    return row[:end]
+
+
 def _cell(row: List[str], position: Optional[int]) -> str:
     if position is None or position >= len(row):
         return ""
@@ -201,6 +231,7 @@ def parse_export(path: Path, mapping: Mapping) -> ParsedFile:
     ref_col = _column(index, mapping.reference_column, header, path)
     status_col = _column(index, mapping.status_column, header, path)
     skip_statuses = {s.strip().lower() for s in mapping.skip_statuses}
+    width = len(_without_trailing_blanks(header))
 
     parsed = ParsedFile()
     for offset, row in enumerate(rows[body_start + 1:], start=body_start + 2):
@@ -211,14 +242,29 @@ def parse_export(path: Path, mapping: Mapping) -> ParsedFile:
             parsed.skipped += 1
             continue
         date_text = _cell(row, date_col)
+        dated = bool(date_text) and _fits(date_text, mapping.date_format)
+        filled = _without_trailing_blanks(row)
+        label = next((cell.strip() for cell in filled if cell.strip()), "")
+        if not dated and _SUMMARY_LABEL.match(label):
+            parsed.skipped += 1
+            continue
+        if dated and _DATED_BALANCE_LINE.match(" ".join(_cell(row, desc_col).split())):
+            parsed.skipped += 1
+            continue
+        if len(filled) > width:
+            parsed.errors.append(
+                f"line {offset}: {len(filled)} fields but the header has {width}. "
+                "An amount such as 1,064.33 may be missing its quotes."
+            )
+            continue
         try:
             amount = _amount(row, amount_col, debit_col, credit_col, mapping.invert_amount)
         except BooksError as exc:
             parsed.errors.append(f"line {offset}: {exc}")
             continue
-        # Footers such as "Total" or "End of statement" have no amount and nothing that reads as a date.
+        # Any other line with no amount and nothing that reads as a date is a note from the bank.
         if amount is None:
-            if date_text and _fits(date_text, mapping.date_format):
+            if dated:
                 parsed.errors.append(f"line {offset}: date but no amount")
             else:
                 parsed.skipped += 1
@@ -226,11 +272,10 @@ def parse_export(path: Path, mapping: Mapping) -> ParsedFile:
         if not date_text:
             parsed.errors.append(f"line {offset}: amount but no date")
             continue
-        try:
-            posted_on = datetime.strptime(date_text, mapping.date_format).date()
-        except ValueError:
+        if not dated:
             parsed.errors.append(f"line {offset}: date {date_text!r} does not fit format {mapping.date_format}")
             continue
+        posted_on = datetime.strptime(date_text, mapping.date_format).date()
         # Zero rows are bank notices. They do not move a balance.
         if amount == 0:
             parsed.skipped += 1
@@ -246,7 +291,18 @@ def parse_export(path: Path, mapping: Mapping) -> ParsedFile:
 
 
 _DATE_NAMES = ("posting date", "posted date", "post date", "posted", "date", "transaction date", "trans date", "trans. date")
-_DESCRIPTION_NAMES = ("description", "payee", "merchant", "name", "details", "transaction description", "memo")
+_DESCRIPTION_NAMES = (
+    "description",
+    "desc",
+    "payee",
+    "merchant",
+    "name",
+    "details",
+    "transaction description",
+    "transaction detail",
+    "transaction details",
+    "memo",
+)
 _AMOUNT_NAMES = ("amount", "transaction amount", "amt")
 _DEBIT_NAMES = ("debit", "debits", "withdrawal", "withdrawals", "money out", "charge", "charges")
 _CREDIT_NAMES = ("credit", "credits", "deposit", "deposits", "money in", "payment", "payments")
@@ -264,8 +320,9 @@ def _find_name(names: Tuple[str, ...], lowered: List[str]) -> Optional[int]:
 def suggest_mapping(path: Path) -> Tuple[Mapping, List[str]]:
     """Guess a mapping from a sample export. Returns the guess and what to double-check."""
     text = read_text(path, None)
-    first_line = text.split("\n", 1)[0]
-    delimiter = max((",", ";", "\t", "|"), key=first_line.count) if first_line else ","
+    # Look past the first line, because a bank's preamble may hold no delimiter at all.
+    opening = "\n".join(text.split("\n")[:20])
+    delimiter = max((",", ";", "\t", "|"), key=opening.count) if opening else ","
     rows = list(csv.reader(io.StringIO(text, newline=""), delimiter=delimiter))
     if not rows:
         raise BooksError(f"{Path(path).name} is empty")
