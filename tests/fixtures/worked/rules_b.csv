@@ -1,0 +1,7 @@
+priority,match,pattern,category
+100,contains,CUSTOMER REFUND,4100
+200,contains,SHOPFRONT,4000
+100,contains,WHOLESALE WIDGETS,5000
+100,contains,PACKWELL,5200
+100,contains,SHIPEASY,5300
+100,contains,HOSTLY,6200

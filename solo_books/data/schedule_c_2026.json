@@ -1,0 +1,380 @@
+{
+ "tax_year": 2026,
+ "form": "Schedule C (Form 1040)",
+ "form_title": "Profit or Loss From Business (Sole Proprietorship)",
+ "source_url": "https://www.irs.gov/pub/irs-pdf/f1040sc.pdf",
+ "retrieved": "2026-11-06",
+ "form_revision": "Created 5/15/26",
+ "note": "Line names are taken from the printed form. Instruction pointers such as '(see instructions)' are left out.",
+ "lines": [
+  {
+   "line": "1",
+   "part": "I",
+   "name": "Gross receipts or sales",
+   "key": "gross_receipts",
+   "accepts": "income"
+  },
+  {
+   "line": "2",
+   "part": "I",
+   "name": "Returns and allowances",
+   "key": "returns_allowances",
+   "accepts": "returns"
+  },
+  {
+   "line": "3",
+   "part": "I",
+   "name": "Subtract line 2 from line 1",
+   "compute": [
+    "+1",
+    "-2"
+   ]
+  },
+  {
+   "line": "4",
+   "part": "I",
+   "name": "Cost of goods sold (from line 42)",
+   "compute": [
+    "+42"
+   ]
+  },
+  {
+   "line": "5",
+   "part": "I",
+   "name": "Gross profit. Subtract line 4 from line 3",
+   "compute": [
+    "+3",
+    "-4"
+   ]
+  },
+  {
+   "line": "6",
+   "part": "I",
+   "name": "Other income, including federal and state gasoline or fuel tax credit or refund",
+   "key": "other_income",
+   "accepts": "income"
+  },
+  {
+   "line": "7",
+   "part": "I",
+   "name": "Gross income. Add lines 5 and 6",
+   "compute": [
+    "+5",
+    "+6"
+   ]
+  },
+  {
+   "line": "8",
+   "part": "II",
+   "name": "Advertising",
+   "key": "advertising",
+   "accepts": "expense"
+  },
+  {
+   "line": "9",
+   "part": "II",
+   "name": "Car and truck expenses",
+   "key": "car_truck",
+   "accepts": "expense"
+  },
+  {
+   "line": "10",
+   "part": "II",
+   "name": "Commissions and fees",
+   "key": "commissions_fees",
+   "accepts": "expense"
+  },
+  {
+   "line": "11",
+   "part": "II",
+   "name": "Contract labor",
+   "key": "contract_labor",
+   "accepts": "expense"
+  },
+  {
+   "line": "12",
+   "part": "II",
+   "name": "Depletion",
+   "key": "depletion",
+   "accepts": "expense"
+  },
+  {
+   "line": "13",
+   "part": "II",
+   "name": "Depreciation and section 179 expense deduction (not included in Part III)",
+   "key": "depreciation",
+   "accepts": "expense",
+   "note": "Usually figured by the preparer from asset records, not from bank rows."
+  },
+  {
+   "line": "14",
+   "part": "II",
+   "name": "Employee benefit programs (other than on line 19)",
+   "key": "employee_benefits",
+   "accepts": "expense"
+  },
+  {
+   "line": "15",
+   "part": "II",
+   "name": "Insurance (other than health)",
+   "key": "insurance",
+   "accepts": "expense"
+  },
+  {
+   "line": "16a",
+   "part": "II",
+   "name": "Mortgage (paid to banks, etc.)",
+   "group": "Interest",
+   "key": "interest_mortgage",
+   "accepts": "expense"
+  },
+  {
+   "line": "16b",
+   "part": "II",
+   "name": "Vehicle loan",
+   "group": "Interest",
+   "key": "interest_vehicle_loan",
+   "accepts": "expense"
+  },
+  {
+   "line": "16c",
+   "part": "II",
+   "name": "Other",
+   "group": "Interest",
+   "key": "interest_other",
+   "accepts": "expense"
+  },
+  {
+   "line": "17",
+   "part": "II",
+   "name": "Legal and professional services",
+   "key": "legal_professional",
+   "accepts": "expense"
+  },
+  {
+   "line": "18",
+   "part": "II",
+   "name": "Office expense",
+   "key": "office",
+   "accepts": "expense"
+  },
+  {
+   "line": "19",
+   "part": "II",
+   "name": "Pension and profit-sharing plans",
+   "key": "pension",
+   "accepts": "expense"
+  },
+  {
+   "line": "20a",
+   "part": "II",
+   "name": "Vehicles, machinery, and equipment",
+   "group": "Rent or lease",
+   "key": "rent_equipment",
+   "accepts": "expense"
+  },
+  {
+   "line": "20b",
+   "part": "II",
+   "name": "Other business property",
+   "group": "Rent or lease",
+   "key": "rent_property",
+   "accepts": "expense"
+  },
+  {
+   "line": "21",
+   "part": "II",
+   "name": "Repairs and maintenance",
+   "key": "repairs",
+   "accepts": "expense"
+  },
+  {
+   "line": "22",
+   "part": "II",
+   "name": "Supplies (not included in Part III)",
+   "key": "supplies",
+   "accepts": "expense"
+  },
+  {
+   "line": "23",
+   "part": "II",
+   "name": "Taxes and licenses",
+   "key": "taxes_licenses",
+   "accepts": "expense"
+  },
+  {
+   "line": "24a",
+   "part": "II",
+   "name": "Travel",
+   "group": "Travel and meals",
+   "key": "travel",
+   "accepts": "expense"
+  },
+  {
+   "line": "24b",
+   "part": "II",
+   "name": "Deductible meals",
+   "group": "Travel and meals",
+   "key": "meals",
+   "accepts": "expense",
+   "note": "Shows the full amount booked. The form instructions limit what is deductible; the preparer applies that limit."
+  },
+  {
+   "line": "25",
+   "part": "II",
+   "name": "Utilities",
+   "key": "utilities",
+   "accepts": "expense"
+  },
+  {
+   "line": "26",
+   "part": "II",
+   "name": "Wages (less employment credits)",
+   "key": "wages",
+   "accepts": "expense"
+  },
+  {
+   "line": "27a",
+   "part": "II",
+   "name": "Energy efficient commercial buildings deduction (attach Form 7205)",
+   "key": "energy_buildings",
+   "accepts": "expense"
+  },
+  {
+   "line": "27b",
+   "part": "II",
+   "name": "Other expenses (from line 48)",
+   "compute": [
+    "+48"
+   ]
+  },
+  {
+   "line": "28",
+   "part": "II",
+   "name": "Total expenses before expenses for business use of home. Add lines 8 through 27b",
+   "compute": [
+    "+8",
+    "+9",
+    "+10",
+    "+11",
+    "+12",
+    "+13",
+    "+14",
+    "+15",
+    "+16a",
+    "+16b",
+    "+16c",
+    "+17",
+    "+18",
+    "+19",
+    "+20a",
+    "+20b",
+    "+21",
+    "+22",
+    "+23",
+    "+24a",
+    "+24b",
+    "+25",
+    "+26",
+    "+27a",
+    "+27b"
+   ]
+  },
+  {
+   "line": "29",
+   "part": "II",
+   "name": "Tentative profit or (loss). Subtract line 28 from line 7",
+   "compute": [
+    "+7",
+    "-28"
+   ]
+  },
+  {
+   "line": "30",
+   "part": "II",
+   "name": "Expenses for business use of your home",
+   "key": "business_use_of_home",
+   "accepts": "expense",
+   "note": "Usually figured by the preparer, not from bank rows."
+  },
+  {
+   "line": "31",
+   "part": "II",
+   "name": "Net profit or (loss). Subtract line 30 from line 29",
+   "compute": [
+    "+29",
+    "-30"
+   ]
+  },
+  {
+   "line": "35",
+   "part": "III",
+   "name": "Inventory at beginning of year",
+   "key": "inventory_beginning",
+   "accepts": "inventory"
+  },
+  {
+   "line": "36",
+   "part": "III",
+   "name": "Purchases less cost of items withdrawn for personal use",
+   "key": "cogs_purchases",
+   "accepts": "cogs"
+  },
+  {
+   "line": "37",
+   "part": "III",
+   "name": "Cost of labor. Do not include any amounts paid to yourself",
+   "key": "cogs_labor",
+   "accepts": "cogs"
+  },
+  {
+   "line": "38",
+   "part": "III",
+   "name": "Materials and supplies",
+   "key": "cogs_materials",
+   "accepts": "cogs"
+  },
+  {
+   "line": "39",
+   "part": "III",
+   "name": "Other costs",
+   "key": "cogs_other",
+   "accepts": "cogs"
+  },
+  {
+   "line": "40",
+   "part": "III",
+   "name": "Add lines 35 through 39",
+   "compute": [
+    "+35",
+    "+36",
+    "+37",
+    "+38",
+    "+39"
+   ]
+  },
+  {
+   "line": "41",
+   "part": "III",
+   "name": "Inventory at end of year",
+   "key": "inventory_ending",
+   "accepts": "inventory"
+  },
+  {
+   "line": "42",
+   "part": "III",
+   "name": "Cost of goods sold. Subtract line 41 from line 40",
+   "compute": [
+    "+40",
+    "-41"
+   ]
+  },
+  {
+   "line": "48",
+   "part": "V",
+   "name": "Total other expenses",
+   "key": "other_expenses",
+   "accepts": "expense"
+  }
+ ]
+}

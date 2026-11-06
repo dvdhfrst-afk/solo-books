@@ -1,0 +1,10 @@
+{
+ "date_column": "Posted",
+ "date_format": "%Y-%m-%d",
+ "description_column": "Details",
+ "debit_column": "Withdrawals",
+ "credit_column": "Deposits",
+ "reference_column": "Transaction ID",
+ "status_column": "Status",
+ "skip_lines": 3
+}

@@ -1,0 +1,16 @@
+priority,match,pattern,category,direction
+100,starts,CLIENT ,4000,in
+100,contains,REDWOOD PLAZA,6105,out
+100,contains,SERVICE FEE,6210,
+100,exact,INTEREST PAID,4900,in
+100,contains,HALCYON,6050,
+100,contains,BRIGHT AND COLE,6070,
+100,contains,PIXEL FOUNDRY,6030,
+100,contains,BUSINESS LICENSE,6130,
+100,contains,NOTION,6200,
+100,contains,CLOUDSTACK,6200,
+100,contains,ZIPNET,6160,
+100,contains,STAPLE HUT,6080,
+100,regex,^NEON\s+ADS,6000,
+100,contains,SKYWAY AIR,6140,
+100,contains,HILLSIDE HOTEL,6140,

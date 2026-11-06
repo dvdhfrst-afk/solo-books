@@ -1,0 +1,6 @@
+{
+ "date_column": "Post Date",
+ "date_format": "%m/%d/%Y",
+ "description_column": "Description",
+ "amount_column": "Amount"
+}

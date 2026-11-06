@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "solo-books"
+version = "0.1.0"
+description = "Local bookkeeping for one person who owns one or more single-member LLCs."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+solo-books = "solo_books.cli:main"
+
+[tool.setuptools]
+packages = ["solo_books"]
+
+[tool.setuptools.package-data]
+solo_books = ["data/*"]
