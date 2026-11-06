@@ -171,7 +171,7 @@ python -m solo_books reconcile run "A Card" --from 2025-03-01 --to 2025-03-31 --
 Difference: 15.00. The statement shows more money out (or less in) than the books.
 
 Where to look:
-  No single row explains it. Look for a statement line of 15.00 that is not in the books, or compare line by line with --statement FILE.
+  No single row explains it. Look for a statement line of 15.00 that is not in the books.
 
 Line by line against the statement file:
   On the statement, not in the books:

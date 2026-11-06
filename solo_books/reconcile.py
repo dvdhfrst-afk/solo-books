@@ -139,7 +139,7 @@ def compute(
     )
     _check_beginning(conn, account, report)
     if report.difference != 0:
-        _explain_difference(conn, account, report, rows)
+        _explain_difference(conn, account, report, rows, statement_file is not None)
     if statement_file is not None:
         _compare_statement(account, report, rows, Path(statement_file))
     if recon["status"] == "finished":
@@ -187,7 +187,11 @@ def _check_beginning(conn: sqlite3.Connection, account: sqlite3.Row, report: Rec
 
 
 def _explain_difference(
-    conn: sqlite3.Connection, account: sqlite3.Row, report: ReconcileReport, rows: List[sqlite3.Row]
+    conn: sqlite3.Connection,
+    account: sqlite3.Row,
+    report: ReconcileReport,
+    rows: List[sqlite3.Row],
+    has_statement_file: bool,
 ) -> None:
     """Look for single rows that would explain the whole difference. Suggestions, never changes."""
     diff = report.difference
@@ -217,10 +221,8 @@ def _explain_difference(
             found = True
             report.hints.append(f"Transaction {_describe(row)} is dated just outside the period and equals the difference.")
     if not found:
-        report.hints.append(
-            f"No single row explains it. Look for a statement line of {format_cents(abs(diff))} that is not in the books, "
-            "or compare line by line with --statement FILE."
-        )
+        advice = f"No single row explains it. Look for a statement line of {format_cents(abs(diff))} that is not in the books"
+        report.hints.append(advice + ("." if has_statement_file else ", or compare line by line with --statement FILE."))
 
 
 def _describe(row: sqlite3.Row) -> str:

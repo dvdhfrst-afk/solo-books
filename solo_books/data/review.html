@@ -101,6 +101,7 @@ label.rule { display: inline-flex; gap: 6px; align-items: center; font-size: 14p
 <script nonce="__NONCE__">
 "use strict";
 const TOKEN = "__TOKEN__";
+const ROWS_SHOWN = 5;
 let state = null;
 let lastAction = null;
 
@@ -193,18 +194,30 @@ function renderGroup(group, business) {
   const transferCategory = business.categories.find((c) => c.kind === "transfer");
   transfer.addEventListener("click", () => send(transferCategory && transferCategory.code));
 
-  return el("section", { className: "group" },
+  // Long groups stay short so the next merchant is one glance away. Hidden rows are still ticked.
+  const section = el("section", { className: "group" },
     el("div", { className: "head" },
       el("span", { className: "merchant", textContent: group.merchant }),
       el("span", { className: "biz", textContent: group.business + ", " + group.rows.length + (group.rows.length === 1 ? " row" : " rows") }),
       el("span", { className: "total", textContent: group.total }),
     ),
-    table,
     el("div", { className: "actions" },
       select, book, transfer,
       el("label", { className: "rule" }, makeRule, "Always book " + group.merchant + " this way"),
     ),
+    table,
   );
+  const hidden = [...table.rows].slice(ROWS_SHOWN);
+  if (hidden.length) {
+    hidden.forEach((tr) => { tr.hidden = true; });
+    const more = el("button", { type: "button", textContent: "Show " + hidden.length + " more rows" });
+    more.addEventListener("click", () => {
+      hidden.forEach((tr) => { tr.hidden = false; });
+      more.remove();
+    });
+    section.append(more);
+  }
+  return section;
 }
 
 function render() {

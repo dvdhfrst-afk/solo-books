@@ -25,8 +25,8 @@ class Basics(BooksCase):
 
     def test_missing_books_are_an_error_not_empty_books(self) -> None:
         missing = self.dir / "nope.sqlite3"
-        code = main(["--db", str(missing), "status"])
-        self.assertEqual(code, 2)
+        self.db_path = missing
+        self.assertIn("no books at", self.fails("status"))
         self.assertFalse(missing.exists())
 
     def test_init_creates_and_never_clobbers(self) -> None:
@@ -40,8 +40,8 @@ class Basics(BooksCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM businesses").fetchone()[0], 1)
 
     def test_db_flag_works_after_the_command_too(self) -> None:
-        code = main(["status", "--db", str(self.db_path)])
-        self.assertEqual(code, 0)
+        with mock.patch("builtins.print"):
+            self.assertEqual(main(["status", "--db", str(self.db_path)]), 0)
 
     def test_environment_variable_names_the_books(self) -> None:
         with mock.patch.dict(os.environ, {db.DB_ENV_VAR: str(self.db_path)}):
@@ -49,8 +49,8 @@ class Basics(BooksCase):
             self.assertEqual(db.resolve_db_path("other"), Path("other"))
 
     def test_a_file_that_is_not_books_is_refused(self) -> None:
-        path = self.write("junk.sqlite3", "this is not a database, just text that is long enough\n" * 50)
-        self.assertEqual(main(["--db", str(path), "status"]), 2)
+        self.db_path = self.write("junk.sqlite3", "this is not a database, just text that is long enough\n" * 50)
+        self.assertIn("not a solo-books file", self.fails("status"))
 
     def test_a_newer_file_is_refused(self) -> None:
         self.conn.execute("PRAGMA user_version = 999")
