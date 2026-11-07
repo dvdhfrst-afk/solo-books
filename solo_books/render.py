@@ -323,10 +323,10 @@ def balances_text(report: Balances) -> str:
         f"Period: {report.period.label} ({report.period.start} to {report.period.end}), cash basis",
         "",
         table(["Account", "Kind", "Start", "End"], accounts, {2, 3}),
-        "Card balances show what is owed.",
-        "",
-        table(["What moved the money", "Amount"], _balance_lines(report), {1}),
     ]
+    if any(account.kind == "credit_card" for account in report.accounts):
+        lines.append("Card balances show what is owed.")
+    lines.extend(["", table(["What moved the money", "Amount"], _balance_lines(report), {1})])
     if report.inventory_end is not None:
         lines.extend(
             [
