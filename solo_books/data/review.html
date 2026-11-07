@@ -207,7 +207,9 @@ function renderGroup(group, business) {
     ),
     el("div", { className: "actions" },
       select, book, transfer,
-      el("label", { className: "rule" }, makeRule, "Always book " + group.merchant + " this way"),
+      group.can_make_rule
+        ? el("label", { className: "rule" }, makeRule, "Always book " + group.merchant + " this way")
+        : el("span", { className: "biz", textContent: "No rule offered: this name could be many payees" }),
     ),
     table,
   );

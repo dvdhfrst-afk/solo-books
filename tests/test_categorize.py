@@ -378,3 +378,58 @@ class ReviewAnswers(BooksCase):
         path = self.write("x.ofx", "OFXHEADER:100\n\n" + text)
         self.assertIn("appears more than once", self.ok("import", "Chk", str(path)))
 
+
+class PayeesStayApart(BooksCase):
+    """Rows that share only how the money moved must not share a booking."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.ok("business", "add", "Business A")
+        self.ok("account", "add", "Chk", "--kind", "checking", "--date-format", "%Y-%m-%d")
+
+    def bring_in(self, name: str, *rows: str) -> None:
+        self.ok("import", "Chk", str(self.write(name, "Date,Description,Amount\n" + "\n".join(rows) + "\n")))
+
+    def category_of(self, description: str):
+        return self.conn.execute("SELECT category_id FROM transactions WHERE description = ?", (description,)).fetchone()[0]
+
+    def test_names_run_on_to_the_payee(self) -> None:
+        from solo_books.text import merchant_key
+
+        for description, key in (
+            ("WIRE TRANSFER FROM BIG CLIENT INC", "WIRE TRANSFER FROM BIG CLIENT INC"),
+            ("ZELLE PAYMENT TO JOHN SMITH 88213", "ZELLE PAYMENT TO JOHN SMITH"),
+            ("PAYMENT - THANK YOU", "PAYMENT THANK YOU"),
+            ("CHECK 1001", "CHECK"),
+            ("DEPOSIT - MOBILE", "DEPOSIT MOBILE"),
+            ("SQ *BLUE FERN CAFE 0423 OGDEN UT", "BLUE FERN CAFE"),
+            ("ACME WIDGETS CO OGDEN UT", "ACME WIDGETS CO"),
+        ):
+            self.assertEqual(merchant_key(description), key)
+
+    def test_two_payees_by_wire_are_two_decisions(self) -> None:
+        client, owner = "WIRE TRANSFER FROM BIG CLIENT INC", "WIRE TRANSFER FROM SOLE OWNER CAPITAL"
+        self.bring_in("a.csv", f"2025-01-02,{client},4000.00", f"2025-01-03,{owner},20000.00")
+        self.ok("review", stdin="r 4000\nq\n")
+        self.assertIsNotNone(self.category_of(client))
+        self.assertIsNone(self.category_of(owner))
+
+    def test_no_rule_on_a_name_that_is_only_a_payment_method(self) -> None:
+        for name, row in (("c.csv", "CHECK 1001"), ("d.csv", "DEPOSIT - MOBILE")):
+            self.bring_in(name, f"2025-01-02,{row},5.00")
+            out = self.ok("review", stdin="r 4000\nq\n")
+            self.assertIn("how the money moved", out)
+            self.assertIsNone(self.category_of(row))
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM rules").fetchone()[0], 0)
+        out = self.ok("review", stdin="a 4000\n4000\n")
+        self.assertIn("booked to 4000", out)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM transactions WHERE category_id IS NULL").fetchone()[0], 0)
+
+    def test_the_prompt_lists_what_a_group_answer_would_book(self) -> None:
+        self.bring_in("a.csv", *[f"2025-01-{day:02d},CHECK {1000 + day},-{day}.00" for day in range(1, 13)])
+        out = self.ok("review", stdin="q\n")
+        self.assertIn("12 queued rows from CHECK, total -78.00", out)
+        self.assertIn("CHECK 1010", out)
+        self.assertNotIn("CHECK 1011", out)
+        self.assertIn("...and 2 more", out)
+

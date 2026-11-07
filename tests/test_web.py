@@ -217,3 +217,13 @@ class ReviewPage(BooksCase):
         page = self.request("GET", f"/?key={self.server.token}")[1].decode("utf-8")
         self.assertIn("GROUPS_AT_A_TIME", page)
 
+    def test_no_rule_is_offered_or_accepted_on_a_payment_method(self) -> None:
+        row = ledger.add_manual(self.conn, self.acct, date(2025, 1, 6), -100, "CHECK 1001")
+        data = json.loads(self.request("GET", "/api/queue", headers={"X-Solo-Books-Token": self.server.token})[1])
+        offered = {group["merchant"]: group["can_make_rule"] for group in data["groups"]}
+        self.assertFalse(offered["CHECK"])
+        self.assertTrue(offered["BLUE FERN CAFE"])
+        status, result = self.post("/api/categorize", {"ids": [row], "category": "6150", "rule_pattern": "CHECK"})
+        self.assertEqual(status, 400)
+        self.assertIn("how the money moved", result["error"])
+

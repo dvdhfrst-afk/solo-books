@@ -996,6 +996,8 @@ def cmd_salvage(args) -> int:
     print(f"Copied what could be read from {source} to {destination}. {source} was only read.")
     for table, count in sorted(outcome.copied.items()):
         print(f"  {table}: {count} row(s) copied")
+    if outcome.cut_short:
+        print("  The file was cut short, as by an interrupted copy. Whatever was in the missing end is gone.")
     for table, count in sorted(outcome.unreadable.items()):
         print(f"  {table}: up to {count} row(s) could not be read")
     for table in sorted(outcome.unknown_loss):

@@ -73,7 +73,8 @@ sign runs, and a wrong guess would flip every row without any error.
 
 ## When the file does not fit
 
-If your file's columns differ, the import stops and names the columns it did find. Nothing is saved. You can adjust a
+If your file's columns differ, the import stops, names the column it wanted, and shows the line it took for the header.
+Nothing is saved. If that line is bank chatter rather than the header, the header's own wording differs from the layout. You can adjust a
 single column with a flag and keep the rest:
 
 ```bash

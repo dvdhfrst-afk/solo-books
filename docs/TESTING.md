@@ -10,12 +10,12 @@ its accounting or its security. Weigh it accordingly: keep backups, and tie your
 python -m unittest discover
 ```
 
-The suite has 387 tests and needs no network. Results:
+The suite has 406 tests and needs no network. Results:
 
 | System | Python | Result |
 |---|---|---|
-| Windows 11 | 3.9.25 | All pass, 1 skipped (owner-only file modes do not exist on Windows). About 80 seconds. |
-| Linux in a container (`python:3.9-slim`), as an ordinary user | 3.9.25 | All pass, none skipped. About 55 seconds. |
+| Windows 11 | 3.9.25 | All pass, 1 skipped (owner-only file modes do not exist on Windows). About 60 seconds. |
+| Linux in a container (`python:3.9-slim`), as an ordinary user | 3.9.25 | All pass, none skipped. About 45 seconds. |
 
 No other Python version has been run, and macOS has not been run. The code uses nothing specific to any of them, and
 the syntax is checked against 3.9, but that is reasoning rather than a test.
@@ -35,7 +35,7 @@ the cent.
 python tests/long_session.py --years 6 --rows-per-account-month 230
 ```
 
-On Windows 11 with Python 3.9.25, that run read 83,808 rows and made a 38.8 MB file. It took 154 seconds, ran 4,756
+On Windows 11 with Python 3.9.25, that run read 83,808 rows and made a 38.8 MB file. It took 112 seconds, ran 4,756
 commands in one process, tied 456 statements, compared 162 figures, and every one matched. A smaller run on Linux (3
 years, 11,016 rows) also matched.
 
@@ -46,25 +46,33 @@ file), including about half a second for Python to start. These are one machine'
 
 | Command | Seconds |
 |---|---|
-| First import of all 120,000 rows | 12.4 |
-| The same file again (nothing new) | 5.5 |
-| `status`, `review --groups` | about 1 |
-| `txn list`, `report pnl` for one year, `report balances` | about 0.6 |
-| `report preparer` for one year | 1.2 |
-| `check` | 1.9 |
-| `backup` | 1.6 |
-| `salvage` | 6.7 |
-| `imports undo` of the whole file | 1.4 |
+| First import of all 120,000 rows | 11.1 |
+| The same file again (nothing new) | 4.2 |
+| `status`, `review --groups` | about 0.8 |
+| `txn list`, `report pnl` for one year, `report balances` | about 0.5 |
+| `report preparer` for one year | 0.8 |
+| `check` | 1.4 |
+| `backup` | 1.3 |
+| `salvage` | 5.6 |
+| `imports undo` of the whole file | 1.3 |
 
 With 99,494 rows waiting for review from 3,980 merchants:
 
 - The web page opened in about 3 seconds in a real browser, drawing 100 merchants at a time.
-- Each `r CODE` answer in the terminal took about 2.4 seconds. The time grows with the size of the queue.
+- Each `r CODE` answer in the terminal took about 2 seconds. The time grows with the size of the queue.
+
+## A stranger's run
+
+Twice, an AI agent that had not written the code and had seen only the README followed it from a fresh clone on Python
+3.9, then invented its own messy bank and card files and tried to break things. The first run found two ways to book money
+wrongly without noticing. The second found a third: different payees grouped under a shared opening such as WIRE TRANSFER
+FROM. All three were fixed and have tests, but the third fix has not had a stranger's run of its own. These were agents,
+not people: no human stranger has tried this.
 
 ## The review page in a browser
 
-Tested by hand on a built-in Chromium browser against the final code, through real clicks on the page's elements, on
-invented books of 296 waiting rows: the grouped queue, "Choose a category first", booking with one row unticked and a new
+Tested on a built-in Chromium browser against the final code, through real clicks on the page's elements, on invented books
+of about 300 waiting rows: the grouped queue, no rule offered on a group named only `CHECK`, "Choose a category first", booking with one row unticked and a new
 rule (58 booked, the unticked row stayed), Undo (58 back, rule gone), the business filter, a description of
 `<img src=x onerror=alert(1)>` shown as plain text with no image created, a wrong or missing key refused with status 403,
 and no sideways scrolling at 375 pixels wide. Firefox and Safari have not been tried.

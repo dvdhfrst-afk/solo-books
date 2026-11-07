@@ -20,6 +20,7 @@ _CHUNK = 500
 # How far past unreadable rows to keep looking when the table cannot say where it ends.
 _PROBE_LIMIT = 20000
 _MAX_SHOWN = 10
+_LARGEST_PADDED_FILE = 16 * 1024 ** 3
 
 
 @dataclass
@@ -279,10 +280,11 @@ class SalvageReport:
     refused: Dict[str, int] = field(default_factory=dict)
     detached: int = 0
     removed: int = 0
+    cut_short: bool = False
 
     @property
     def lost_anything(self) -> bool:
-        return bool(self.unreadable or self.unknown_loss or self.refused or self.removed)
+        return bool(self.unreadable or self.unknown_loss or self.refused or self.removed or self.cut_short)
 
 
 def _readable_rows(source: sqlite3.Connection, table: str, report: SalvageReport) -> Iterator[sqlite3.Row]:
@@ -350,6 +352,28 @@ def _clear_broken_links(target: sqlite3.Connection, report: SalvageReport) -> No
     target.execute("UPDATE transactions SET category_source = NULL, rule_id = NULL WHERE category_id IS NULL")
 
 
+class _NoTableList(BooksError):
+    pass
+
+
+def _padded_copy(damaged: Path, destination: Path) -> Optional[Path]:
+    """A file cut short, as by an interrupted copy, reads as damaged throughout. Restored to full length, most of it reads."""
+    try:
+        with open(damaged, "rb") as handle:
+            header = handle.read(32)
+        page_size = int.from_bytes(header[16:18], "big")
+        whole = (65536 if page_size == 1 else page_size) * int.from_bytes(header[28:32], "big")
+        if not damaged.stat().st_size < whole <= _LARGEST_PADDED_FILE:
+            return None
+        padded = destination.with_name(destination.name + ".padded")
+        shutil.copyfile(str(damaged), str(padded))
+        with open(padded, "r+b") as handle:
+            handle.truncate(whole)
+        return padded
+    except OSError:
+        return None
+
+
 def salvage(damaged: Path, destination: Path) -> SalvageReport:
     """Copy every readable row into new books. The damaged file is only read."""
     damaged, destination = Path(damaged), Path(destination)
@@ -359,12 +383,29 @@ def salvage(damaged: Path, destination: Path) -> SalvageReport:
         raise BooksError(f"no books at {damaged}.")
     if not looks_like_sqlite(damaged):
         raise BooksError(f"{damaged} no longer starts like a database, so nothing can be read from it. Restore a backup instead.")
+    try:
+        return _copy_readable(damaged, destination, damaged)
+    except _NoTableList as first_failure:
+        padded = _padded_copy(damaged, destination)
+        if padded is None:
+            raise BooksError(str(first_failure)) from None
+    try:
+        report = _copy_readable(padded, destination, damaged)
+    except _NoTableList as second_failure:
+        raise BooksError(str(second_failure)) from None
+    finally:
+        padded.unlink()
+    report.cut_short = True
+    return report
+
+
+def _copy_readable(source_path: Path, destination: Path, damaged: Path) -> SalvageReport:
     report = SalvageReport()
     try:
-        source = _open_read_only(damaged)
+        source = _open_read_only(source_path)
         names = {row[0] for row in source.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     except sqlite3.DatabaseError as exc:
-        raise BooksError(f"the table list in {damaged} cannot be read ({exc}). Restore a backup instead.") from None
+        raise _NoTableList(f"the table list in {damaged} cannot be read ({exc}). Restore a backup instead.") from None
     if not {"businesses", "transactions"} <= names:
         source.close()
         raise BooksError(f"{damaged} does not hold solo-books tables that can be read. Restore a backup instead.")

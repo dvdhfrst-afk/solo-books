@@ -151,7 +151,8 @@ python -m solo_books rules add --business "Business B" --contains "OWNER DRAW" -
 
 Work through the rest, a row at a time in the terminal. At the first row (a cafe) type `r 6150`: that books every
 queued row from that merchant to Meals and makes a rule for the future. At the next merchant (a hardware store)
-type `r 6110`. Each answer prints what it booked. Type `?` at any time for the other answers. A category can be named by
+type `r 6110`. Before you answer it lists the rows that `a` or `r` would book, up to ten of them with a count of the rest,
+and each answer prints what it booked. Type `?` at any time for the other answers. A category can be named by
 its code, or by at least three letters of its name.
 
 ```bash
@@ -363,8 +364,9 @@ python -m solo_books imports list
 Rules run in priority order, lowest number first, and the first match wins. Each has one match type:
 `--contains`, `--starts`, `--exact` or `--regex`, none of them case-sensitive. `--exact` means the whole description, or
 the merchant name as `rules test` reads it. A rule made with `r` at the review prompt, or with the box on the web page, is
-an exact rule on the merchant, so it reaches no further than the group you saw. A short `--contains` reaches much
-further: `PAYMENT` catches every row with that word in it. A rule can be limited with
+an exact rule on the merchant name. It is not offered for a name that only says how the money moved, such as `CHECK` or
+`WIRE TRANSFER FROM`, since many payees share those. Rows like that stay yours to book, one at a time or as a listed
+group. A short `--contains` reaches much further: `PAYMENT` catches every row with that word in it. A rule can be limited with
 `--direction in` or `out`, `--min`, `--max` and `--account`.
 
 ```bash
@@ -427,7 +429,7 @@ the period's rows and compares the result with the ending balance. It exits with
 names single rows that would explain the difference: one the statement lacks, a likely duplicate, a reversed sign, or
 one dated just outside the period.
 
-`reconcile finish ID` works only when the balances tie to the cent. It locks the period's rows against deletion
+`reconcile finish ID` works only when the balances tie to the cent. It locks the period's rows against deletion and editing
 (categories can still change). A row imported into a finished period later gets a warning, and `reconcile show ID`
 lists it. `reconcile reopen ID` unlocks the latest finished period.
 
@@ -452,7 +454,8 @@ python -m solo_books business rename "Business B" "Business Z"
 python -m solo_books account rename "B Checking" "Z Checking"
 ```
 
-A correction looks like `txn edit ID --amount -15.50 --description "CITY PARKING"`, on a row you added with `txn add`.
+A correction looks like `txn edit ID --amount -15.50 --description "CITY PARKING"`, on a row you added with `txn add`, as
+long as its statement period is not finished. `reconcile reopen` unlocks the latest finished period.
 
 `account delete NAME` removes an account with no rows. If it has rows, `--with-rows` takes them with it, unless it has a
 finished reconciliation. `business delete NAME` removes a business that has no accounts left, with its chart and rules.

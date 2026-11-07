@@ -16,6 +16,7 @@ from .db import connect, friendly_error, transaction
 from .errors import BooksError
 from .ledger import get_transaction, uncategorize
 from .money import format_cents
+from .text import names_a_payee
 from .review import book_rows, group_rows, queue
 from .rules import delete_rule
 
@@ -54,6 +55,7 @@ def queue_payload(conn) -> dict:
                 "business": group.business,
                 "merchant": group.merchant,
                 "total": format_cents(group.total_cents),
+                "can_make_rule": names_a_payee(group.merchant),
                 "rows": [
                     {
                         "id": row["id"],

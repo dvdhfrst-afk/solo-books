@@ -41,7 +41,10 @@ First version meant for other people's real books.
   name start now needs three letters, and every answer prints what it booked.
 - A rule made at review or on the web page was a "contains" rule on the merchant, so a short name such as PAYMENT caught
   other payees' rows. It is now an exact rule on the merchant, and `--exact` also compares the merchant name.
-- `salvage` could report thousands of lost rows from a small file.
+- Review grouped different payees that shared an opening such as WIRE TRANSFER FROM, and a rule on that name kept
+  booking other payees' rows. Names now run on to the payee, review lists the rows it is about to book, and no rule is
+  offered on a name that only says how the money moved.
+- `salvage` could report thousands of lost rows from a small file, and gave up on a file that was merely cut short.
 - A bank id repeated within one file now gets a warning.
 
 ## 0.x

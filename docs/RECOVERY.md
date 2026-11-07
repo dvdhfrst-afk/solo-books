@@ -71,8 +71,10 @@ keep using `--db saved.sqlite3`, or rename it to `books.sqlite3` once the damage
 
 Reconciliations are the record of what you already proved, so run `reconcile list` and rerun any that no longer tie.
 
-If `salvage` says it cannot find the table list, the start of the file is gone and this program cannot read it.
-Restore a backup. Tools built for SQLite repair may get further, on a copy.
+A file cut short, as by an interrupted copy, is handled: `salvage` reads what is there and says the end is gone.
+
+If `salvage` says it cannot read the table list, the part of the file that says where everything is has been damaged, and
+this program cannot read it. Restore a backup. Tools built for SQLite repair may get further, on a copy.
 
 ## Messages you may see
 

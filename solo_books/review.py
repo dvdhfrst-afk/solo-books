@@ -11,6 +11,9 @@ from .errors import BooksError
 from .ledger import categorize, find_transactions, get_transaction
 from .money import format_cents
 from .rules import add_rule, apply_rules, hold_back
+from .text import names_a_payee
+
+_ROWS_LISTED = 10
 
 
 @dataclass
@@ -52,6 +55,11 @@ def book_rows(
 
     Rows in held_back stay in the queue, and the new rule will not book them later either.
     """
+    if rule_pattern and not names_a_payee(rule_pattern):
+        raise BooksError(
+            f"{rule_pattern!r} says how the money moved, not who it went to, so a rule on it would catch other payees' rows. "
+            "Nothing was booked. Book these rows without a rule, or use 'rules add' with wording only this payee has."
+        )
     if set(held_back) & set(transaction_ids):
         raise BooksError("a row cannot be both booked and held back")
     for transaction_id in held_back:
@@ -102,7 +110,8 @@ def run_interactive(
         if not rows:
             break
         row = rows[0]
-        same = [other["id"] for other in rows if other["merchant"] == row["merchant"] and other["business_id"] == row["business_id"]]
+        group = [other for other in rows if other["merchant"] == row["merchant"] and other["business_id"] == row["business_id"]]
+        same = [other["id"] for other in group]
         write(
             f"\n[{len(rows)} left] {row['posted_on']}  {format_cents(row['amount_cents']):>12}  "
             f"{row['account_name']} ({row['business_name']})\n  {row['description']}"
@@ -110,7 +119,12 @@ def run_interactive(
         if row["memo"]:
             write(f"  memo: {row['memo']}")
         if len(same) > 1:
-            write(f"  {len(same)} queued rows from {row['merchant']}")
+            total = format_cents(sum(other["amount_cents"] for other in group))
+            write(f"  {len(same)} queued rows from {row['merchant']}, total {total}. 'a' or 'r' books all of them:")
+            for other in group[:_ROWS_LISTED]:
+                write(f"    {other['posted_on']}  {format_cents(other['amount_cents']):>12}  {other['description']}")
+            if len(group) > _ROWS_LISTED:
+                write(f"    ...and {len(group) - _ROWS_LISTED} more")
         try:
             answer = read("category (? for help)> ").strip()
         except EOFError:

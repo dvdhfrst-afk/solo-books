@@ -298,6 +298,18 @@ class Salvage(Filled):
             if "could not be read" in line and "up to" in line:
                 self.assertLessEqual(int(line.split("up to ")[1].split()[0]), 3000, line)
 
+    def test_a_file_cut_short_still_gives_up_what_it_holds(self) -> None:
+        data = self.db_path.read_bytes()
+        for keep in (len(data) - 4096, len(data) // 2):
+            self.db_path.write_bytes(data[:keep])
+            target = self.dir / f"saved-{keep}.sqlite3"
+            code, out, err = self.run_cli("salvage", str(target))
+            self.assertIn(code, (0, 1), err)
+            self.assertGreater(self.rows(target), 0)
+            self.assertEqual([p for p in self.dir.iterdir() if p.name.endswith(".padded")], [])
+            self.assertEqual(self.db_path.read_bytes(), data[:keep])
+            self.assertTrue(safety.check_books(target).healthy)
+
     def test_a_missing_file_is_called_missing(self) -> None:
         self.db_path.unlink()
         self.assertIn("no books at", self.fails("salvage", str(self.dir / "saved.sqlite3")))
