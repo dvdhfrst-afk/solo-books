@@ -65,6 +65,10 @@ Kept out of profit: Transfer nets to zero (checking -512.47, card +512.47). Owne
 Check against cash: profit 8,117.53 - draws 1,500.00 + transfers 0.00 = 6,617.53.
 Checking moved +6,928.15 and the card -310.62, which is also 6,617.53.
 
+Balances, cash less what the card is owed: start 5,000.00 - 200.00 = 4,800.00; end 11,928.15 - 510.62 = 11,417.53, which
+is 4,800.00 + 6,617.53. For February alone: start 8,188.00 - 459.70 = 7,728.30; end 10,351.25 - 427.09 = 9,924.16, which
+is 7,728.30 + the month's net 2,195.86.
+
 ### Schedule C rollup, tax year 2025
 
 | Line | Name | Amount |

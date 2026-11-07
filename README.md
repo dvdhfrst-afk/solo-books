@@ -15,8 +15,8 @@ This is a bookkeeping tool. Its reports are bookkeeping summaries, not tax advic
 - A "Transfer" category keeps card payments and moves between accounts out of income and expenses.
 - Separate books and a separate chart of accounts per business.
 - Reconcile an account for a statement period and see exactly what does not match.
-- Profit and loss by period and business, a Schedule C rollup per business per tax year, and CSV files for your
-  preparer.
+- Profit and loss by period and business, balances that show what moved the money, a Schedule C rollup per business
+  per tax year, and CSV files for your preparer.
 
 ## Run it
 
@@ -209,8 +209,14 @@ python -m solo_books inventory set --business "Business B" --year 2025 --beginni
 python -m solo_books report schedule-c --year 2025 --business "Business B"
 ```
 
-Write everything your preparer needs into a folder: the rollup, the profit and loss by quarter, and every row behind
-them, for each business.
+See what each account held at both ends of the year, and what moved the money between them:
+
+```bash
+python -m solo_books report balances --period 2025
+```
+
+Write everything your preparer needs into a folder: the rollup, the profit and loss by quarter, the balances, and every
+row behind them, for each business.
 
 ```bash
 python -m solo_books report preparer --year 2025 --out preparer-2025
@@ -306,6 +312,12 @@ Rules never overwrite a row you categorized by hand. `rules apply` runs them ove
 also re-runs them over rows that rules booked earlier, which is what you want after changing a rule.
 `rules export` and `rules import` move a rule set between businesses or into a file you keep.
 
+To see everything about one row, including how it was booked, which files held it and its note:
+
+```bash
+python -m solo_books txn show 12
+```
+
 To book specific rows by hand, or send them back to the queue:
 
 ```bash
@@ -365,6 +377,12 @@ money they hold.
 **Periods** are written `2025`, `2025-Q2`, `2025-03` or `2025-01-15..2025-02-20`. Leave off `--business` to see each
 business and then all of them side by side. Add `--format csv -o FILE` for a file.
 
+**Balances** start from what the accounts held, add profit, owner money, transfers and anything still in the queue, and
+arrive at what the accounts hold, to the cent. Transfers should net to zero: anything else means one side of a move is
+missing, is booked to something else, or is in another business's account. A period ending December 31 also shows that
+year's ending inventory count. `inventory list` shows every count saved. An account with no opening balance is left out
+and named in a warning.
+
 **The Schedule C rollup** uses the line names on the official form, kept per tax year in
 `solo_books/data/schedule_c_<year>.json` with the source URL, the form revision and the date retrieved. Every report
 prints that stamp. It leaves some things to your preparer:
@@ -393,7 +411,7 @@ year stop and say so; `--lines-year` uses an earlier form's lines and labels the
 | `rules.py`, `review.py` | Categorization and the queue. |
 | `ledger.py` | Finding, adding, deleting and booking rows. |
 | `reconcile.py` | Comparing the books with a statement. |
-| `reports.py`, `schedule_c.py` | Profit and loss and the rollup. |
+| `reports.py`, `schedule_c.py` | Profit and loss, balances and the rollup. |
 | `render.py` | Text tables and CSV. |
 | `web.py`, `data/review.html` | The local review page. |
 | `money.py`, `periods.py`, `text.py` | Cents, date ranges, description cleanup. |

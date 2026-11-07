@@ -128,6 +128,23 @@ class WorkedExample(BooksCase):
         self.assertIn("510.62", self.ok("account", "show", "A Card"))
         self.assertIn("5,732.25", self.ok("account", "show", "B Checking"))
 
+    def test_balances_report_matches_the_hand_cash_check(self) -> None:
+        def money(period: str) -> dict:
+            rows = parse_csv(
+                self.ok("report", "balances", "--period", period, "--business", "Business A", "--format", "csv")
+            )
+            return {row["item"]: row["amount"] for row in rows if row["section"] == "money"}
+
+        quarter = money("2025-Q1")
+        self.assertEqual(quarter["Money at the start"], "4800.00")
+        self.assertEqual(quarter["Net profit or (loss)"], "8117.53")
+        self.assertEqual(quarter["Owner draws"], "-1500.00")
+        self.assertEqual(quarter["Transfer"], "0.00")
+        self.assertEqual(quarter["Money at the end"], "11417.53")
+        february = money("2025-02")
+        self.assertEqual(february["Money at the start"], "7728.30")
+        self.assertEqual(february["Money at the end"], "9924.16")
+
     def test_every_month_reconciles_and_locks(self) -> None:
         recon = self.expected["reconcile"]
         for account, periods in (("A Checking", recon["a_checking"]), ("A Card", recon["a_card"])):

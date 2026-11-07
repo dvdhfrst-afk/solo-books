@@ -253,6 +253,15 @@ def set_inventory(conn: sqlite3.Connection, business_id: int, year: int, beginni
     )
 
 
+def list_inventory(conn: sqlite3.Connection, business_id: Optional[int] = None) -> List[sqlite3.Row]:
+    sql = (
+        "SELECT i.*, b.name AS business_name FROM inventory_counts i JOIN businesses b ON b.id = i.business_id"
+    )
+    if business_id is None:
+        return conn.execute(sql + " ORDER BY b.name, i.tax_year").fetchall()
+    return conn.execute(sql + " WHERE i.business_id = ? ORDER BY i.tax_year", (business_id,)).fetchall()
+
+
 def get_inventory(conn: sqlite3.Connection, business_id: int, year: int) -> Optional[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM inventory_counts WHERE business_id = ? AND tax_year = ?", (business_id, year)

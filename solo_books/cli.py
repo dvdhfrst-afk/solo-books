@@ -524,6 +524,50 @@ def cmd_txn_list(args, conn) -> int:
     return 0
 
 
+def _booked_by(conn, row) -> str:
+    if row["category_id"] is None:
+        return "waiting for review"
+    booked = f"{row['category_code']} {row['category_name']}"
+    if row["category_source"] == "manual":
+        return f"{booked}, by hand"
+    rule = None
+    if row["rule_id"] is not None:
+        rule = conn.execute("SELECT match_type, pattern FROM rules WHERE id = ?", (row["rule_id"],)).fetchone()
+    if rule is None:
+        return f"{booked}, by a rule since deleted"
+    return f"{booked}, by rule {row['rule_id']} ({rule['match_type']} {rule['pattern']!r})"
+
+
+def cmd_txn_show(args, conn) -> int:
+    row = ledger.get_transaction(conn, args.id)
+    print(f"Transaction {row['id']}")
+    print(f"  Date:        {row['posted_on']}")
+    print(f"  Account:     {row['account_name']} ({row['business_name']})")
+    print(f"  Amount:      {format_cents(row['amount_cents'])}")
+    print(f"  Description: {row['description']}")
+    print(f"  Merchant:    {row['merchant']}")
+    if row["memo"]:
+        print(f"  Memo:        {row['memo']}")
+    if row["reference"]:
+        print(f"  Bank id:     {row['reference']}")
+    print(f"  Category:    {_booked_by(conn, row)}")
+    held_back = ledger.rules_holding_back(conn, row["id"])
+    if held_back:
+        print(f"  Held back from rule(s): {', '.join(str(rule_id) for rule_id in held_back)}")
+    if row["reconciliation_id"] is not None:
+        print(f"  Reconciled:  finished reconciliation {row['reconciliation_id']}")
+    else:
+        print("  Reconciled:  no")
+    sources = ledger.live_imports_holding(conn, row["id"])
+    if sources:
+        print("  Imported:    " + ", ".join(f"{source['file_name']} (import {source['id']})" for source in sources))
+    else:
+        print("  Imported:    no, added by hand")
+    if row["note"]:
+        print(f"  Note:        {row['note']}")
+    return 0
+
+
 def cmd_txn_add(args, conn) -> int:
     account = books.get_account(conn, args.account)
     category = books.find_category(conn, account["business_id"], args.category) if args.category else None
@@ -684,8 +728,26 @@ def cmd_report_schedule_c(args, conn) -> int:
     return 0
 
 
+def cmd_report_balances(args, conn) -> int:
+    period = parse_period(args.period)
+    reports_list = [reports.balances(conn, b, period) for b in _businesses(conn, args.business)]
+    if args.format == "csv":
+        rows: List[List[str]] = []
+        for report in reports_list:
+            rows.extend(render.balances_csv_rows(report))
+        render.deliver(render.csv_text(render.BALANCES_CSV_HEADERS, rows), args.output)
+        if args.output:
+            print(f"Wrote {args.output}")
+        return 0
+    chunks = [render.balances_text(report) for report in reports_list]
+    if len(reports_list) > 1:
+        chunks.append(render.balances_summary_text(reports_list))
+    render.deliver("\n\n".join(chunks), args.output)
+    return 0
+
+
 def cmd_report_preparer(args, conn) -> int:
-    """One folder a tax preparer can work from: the rollup, the quarters, and every row behind them."""
+    """One folder a tax preparer can work from: the rollup, the quarters, the balances, and every row behind them."""
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     period = year_period(args.year)
@@ -700,8 +762,13 @@ def cmd_report_preparer(args, conn) -> int:
         rows = ledger.find_transactions(conn, business_id=business["id"], period=period)
         detail = out_dir / f"{name}-transactions-{args.year}.csv"
         render.deliver(render.csv_text(render.DETAIL_CSV_HEADERS, render.detail_csv_rows(rows, result.form)), str(detail))
+        balances_path = out_dir / f"{name}-balances-{args.year}.csv"
+        render.deliver(
+            render.csv_text(render.BALANCES_CSV_HEADERS, render.balances_csv_rows(reports.balances(conn, business, period))),
+            str(balances_path),
+        )
         print(f"{business['name']}: line 31 {format_cents(result.net_line.cents)}, {len(rows)} rows")
-        print(f"  {rollup}\n  {pnl_path}\n  {detail}")
+        print(f"  {rollup}\n  {pnl_path}\n  {balances_path}\n  {detail}")
         if result.uncategorized_count:
             print(f"  WARNING: {result.uncategorized_count} uncategorized row(s) are not in the figures. Run 'review' first.")
         for warning in result.warnings:
@@ -714,6 +781,22 @@ def cmd_inventory_set(args, conn) -> int:
     business = books.get_business(conn, args.business)
     books.set_inventory(conn, business["id"], args.year, parse_cents(args.beginning), parse_cents(args.ending))
     print(f"Inventory counts saved for {business['name']}, {args.year}.")
+    return 0
+
+
+def cmd_inventory_list(args, conn) -> int:
+    business_id = books.get_business(conn, args.business)["id"] if args.business else None
+    rows = [
+        [
+            row["business_name"],
+            str(row["tax_year"]),
+            format_cents(row["beginning_cents"]),
+            format_cents(row["ending_cents"]),
+            format_cents(row["ending_cents"] - row["beginning_cents"]),
+        ]
+        for row in books.list_inventory(conn, business_id)
+    ]
+    print(render.table(["Business", "Year", "Beginning", "Ending", "Change"], rows, {1, 2, 3, 4}))
     return 0
 
 
@@ -937,6 +1020,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int)
     p.add_argument("--format", choices=("table", "csv"), default="table")
     p.add_argument("-o", "--output")
+    p = add(txn, "show", cmd_txn_show, "everything about one row: how it was booked, where it came from, its note")
+    p.add_argument("id", type=int)
     p = add(txn, "add", cmd_txn_add, "add a row by hand")
     p.add_argument("account")
     p.add_argument("--date", required=True)
@@ -972,10 +1057,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = add(rec, "list", cmd_reconcile_list, "list reconciliations")
     p.add_argument("--account")
 
-    report = nested("report", "profit and loss, Schedule C rollup, preparer export")
+    report = nested("report", "profit and loss, balances, Schedule C rollup, preparer export")
     p = add(report, "pnl", cmd_report_pnl, "profit and loss by period and business")
     p.add_argument("--period", required=True, help="2025, 2025-Q2, 2025-03 or 2025-01-15..2025-02-20")
     p.add_argument("--by", choices=("total", "month", "quarter", "year"), default="total")
+    p.add_argument("--business", help="default: every business")
+    p.add_argument("--format", choices=("table", "csv"), default="table")
+    p.add_argument("-o", "--output")
+    p = add(report, "balances", cmd_report_balances, "account balances at both ends of a period, and what moved the money")
+    p.add_argument("--period", required=True, help="2025, 2025-Q2, 2025-03 or 2025-01-15..2025-02-20")
     p.add_argument("--business", help="default: every business")
     p.add_argument("--format", choices=("table", "csv"), default="table")
     p.add_argument("-o", "--output")
@@ -997,6 +1087,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--year", type=int, required=True)
     p.add_argument("--beginning", required=True)
     p.add_argument("--ending", required=True)
+    p.add_argument("--business")
+    p = add(inventory, "list", cmd_inventory_list, "show the counts saved so far")
     p.add_argument("--business")
 
     p = add(commands, "web", cmd_web, "open the review queue as a local web page", needs_conn=False)

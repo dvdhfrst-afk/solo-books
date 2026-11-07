@@ -52,6 +52,22 @@ def get_transaction(conn: sqlite3.Connection, transaction_id: int) -> sqlite3.Ro
     return row
 
 
+def live_imports_holding(conn: sqlite3.Connection, transaction_id: int) -> List[sqlite3.Row]:
+    """The imports not undone whose files held this row, oldest first."""
+    return conn.execute(
+        "SELECT i.id, i.file_name FROM import_rows r JOIN imports i ON i.id = r.import_id"
+        " WHERE r.transaction_id = ? AND i.undone_at IS NULL ORDER BY i.id",
+        (transaction_id,),
+    ).fetchall()
+
+
+def rules_holding_back(conn: sqlite3.Connection, transaction_id: int) -> List[int]:
+    rows = conn.execute(
+        "SELECT rule_id FROM rule_exceptions WHERE transaction_id = ? ORDER BY rule_id", (transaction_id,)
+    ).fetchall()
+    return [row["rule_id"] for row in rows]
+
+
 def find_transactions(
     conn: sqlite3.Connection,
     business_id: Optional[int] = None,

@@ -8,7 +8,7 @@ from typing import Iterable, List, Optional, Sequence, Set
 
 from .money import format_cents, plain_cents
 from .reconcile import ReconcileReport, printed
-from .reports import NOT_ADVICE, Pnl, PnlRow, ScheduleC, ScheduleLine
+from .reports import NOT_ADVICE, Balances, Pnl, PnlRow, ScheduleC, ScheduleLine
 from .text import spreadsheet_safe
 
 _MAX_CELL = 46
@@ -297,6 +297,94 @@ def detail_csv_rows(rows: Iterable, form) -> List[List[str]]:
             ]
         )
     return result
+
+
+# Balances
+
+def _balance_lines(report: Balances) -> List[List[str]]:
+    """The period's money, from the start to the end, as label and signed amount."""
+    rows = [["Money at the start, less what cards were owed", format_cents(report.money_begin)]]
+    if report.money_opened:
+        rows.append(["Accounts opened in this period", format_cents(report.money_opened)])
+    rows.append(["Net profit or (loss)", format_cents(report.profit)])
+    rows.extend([f"{entry.code} {entry.name}", format_cents(entry.total)] for entry in report.off_profit)
+    if report.waiting_count:
+        rows.append([f"Waiting for review, {report.waiting_count} row(s)", format_cents(report.waiting_net)])
+    rows.append(["Money at the end, less what cards are owed", format_cents(report.money_end)])
+    return rows
+
+
+def balances_text(report: Balances) -> str:
+    accounts = [
+        [a.name, a.kind, format_cents(a.printed(a.begin)), format_cents(a.printed(a.end))] for a in report.accounts
+    ]
+    lines = [
+        f"Balances: {report.business}",
+        f"Period: {report.period.label} ({report.period.start} to {report.period.end}), cash basis",
+        "",
+        table(["Account", "Kind", "Start", "End"], accounts, {2, 3}),
+        "Card balances show what is owed.",
+        "",
+        table(["What moved the money", "Amount"], _balance_lines(report), {1}),
+    ]
+    if report.inventory_end is not None:
+        lines.extend(
+            [
+                "",
+                f"Inventory count at {report.period.end}: {format_cents(report.inventory_end)} (from 'inventory set').",
+                f"Money plus inventory: {format_cents(report.money_end + report.inventory_end)}.",
+            ]
+        )
+    lines.append("")
+    lines.extend(f"WARNING: {warning}" for warning in report.warnings)
+    lines.append(NOT_ADVICE)
+    return "\n".join(lines)
+
+
+def balances_summary_text(reports_list: List[Balances]) -> str:
+    def row(name: str, parts: List[Balances]) -> List[str]:
+        return [
+            name,
+            format_cents(sum(p.money_begin + p.money_opened for p in parts)),
+            format_cents(sum(p.profit for p in parts)),
+            format_cents(sum(p.owner_net for p in parts)),
+            format_cents(sum(p.transfers_net for p in parts)),
+            format_cents(sum(p.waiting_net for p in parts)),
+            format_cents(sum(p.money_end for p in parts)),
+        ]
+
+    rows = [row(report.business, [report]) for report in reports_list]
+    rows.append(row("All businesses", reports_list))
+    return f"All businesses, {reports_list[0].period.label}\n" + table(
+        ["Business", "Start", "Profit", "Owner money", "Transfers", "Waiting", "End"], rows, {1, 2, 3, 4, 5, 6}
+    )
+
+
+BALANCES_CSV_HEADERS = ["business", "period_start", "period_end", "section", "code", "item", "amount"]
+
+
+def balances_csv_rows(report: Balances) -> List[List[str]]:
+    def row(section: str, code: str, item: str, cents: Optional[int] = None) -> List[str]:
+        amount = "" if cents is None else plain_cents(cents)
+        return [report.business, report.period.start.isoformat(), report.period.end.isoformat(), section, code, item, amount]
+
+    rows = []
+    for account in report.accounts:
+        name = f"{account.name} (owed)" if account.kind == "credit_card" else account.name
+        rows.append(row("account start", "", name, account.printed(account.begin)))
+        rows.append(row("account end", "", name, account.printed(account.end)))
+    rows.append(row("money", "", "Money at the start", report.money_begin))
+    if report.money_opened:
+        rows.append(row("money", "", "Accounts opened in this period", report.money_opened))
+    rows.append(row("money", "", "Net profit or (loss)", report.profit))
+    rows.extend(row("money", entry.code, entry.name, entry.total) for entry in report.off_profit)
+    if report.waiting_count:
+        rows.append(row("money", "", "Waiting for review", report.waiting_net))
+    rows.append(row("money", "", "Money at the end", report.money_end))
+    if report.inventory_end is not None:
+        rows.append(row("inventory", "", "Inventory count", report.inventory_end))
+    rows.extend(row("note", "", note) for note in [*report.warnings, NOT_ADVICE])
+    return rows
 
 
 # Reconciliation
