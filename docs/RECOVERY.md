@@ -76,7 +76,7 @@ Restore a backup. Tools built for SQLite repair may get further, on a copy.
 
 ## Messages you may see
 
-**"are busy: another program has them open."** Another solo-books command, a web page still running, a database viewer
+**"are busy: another program has them open."** Another solo-books command in the middle of its work, a database viewer
 or a sync program has the file. Close it and try again. Nothing was changed.
 
 **"are read-only."** Your account cannot write to the file or its folder. Reading still works when no upgrade is

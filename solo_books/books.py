@@ -196,8 +196,14 @@ def list_categories(conn: sqlite3.Connection, business_id: int, include_retired:
     return conn.execute(sql + " ORDER BY code", (business_id,)).fetchall()
 
 
+_SHORTEST_NAME_START = 3
+
+
 def find_category(conn: sqlite3.Connection, business_id: int, text: str) -> sqlite3.Row:
-    """Find a category by code, full name, or a name start only one category has."""
+    """Find a category by code, full name, or a name start of three letters or more that only one category has.
+
+    A letter or two could be a slip of the finger, and booking on one would be silent and wrong.
+    """
     wanted = text.strip()
     rows = list_categories(conn, business_id, include_retired=True)
     for row in rows:
@@ -207,7 +213,9 @@ def find_category(conn: sqlite3.Connection, business_id: int, text: str) -> sqli
     for row in rows:
         if row["name"].lower() == lowered:
             return row
-    starts = [row for row in rows if row["name"].lower().startswith(lowered)] if lowered else []
+    if len(lowered) < _SHORTEST_NAME_START:
+        raise BooksError(f"{text!r} is too short to name a category. Use its code, or at least {_SHORTEST_NAME_START} letters of its name.")
+    starts = [row for row in rows if row["name"].lower().startswith(lowered)]
     if len(starts) == 1:
         return starts[0]
     if len(starts) > 1:

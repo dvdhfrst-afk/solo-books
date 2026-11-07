@@ -38,7 +38,7 @@ class Chart(ChartBase):
         self.assertEqual(self.category(self.biz, "meals")["code"], "6150")
         self.assertEqual(self.category(self.biz, "Trans")["code"], "3900")
         with self.assertRaises(BooksError) as caught:
-            self.category(self.biz, "O")
+            self.category(self.biz, "Oth")
         self.assertIn("could mean", str(caught.exception))
 
     def test_booking_to_another_business_is_refused(self) -> None:
@@ -125,7 +125,8 @@ class Rules(ChartBase):
         self.assertIsNotNone(self.hit("acme widgets"))
         self.assertIsNone(self.hit("THE ACME"))
         self.assertIsNotNone(self.hit("interest  paid"))
-        self.assertIsNone(self.hit("INTEREST PAID 2"))
+        self.assertIsNone(self.hit("INTEREST PAID LATE FEE"))
+        self.assertIsNotNone(self.hit("INTEREST PAID 2"))  # The merchant reads as INTEREST PAID.
         self.assertIsNotNone(self.hit("Neon Ads Q1"))
 
     def test_contains_finds_a_merchant_split_by_a_store_number(self) -> None:
@@ -318,3 +319,62 @@ class Queue(ChartBase):
         self.assertEqual(review.queue(self.conn), [])
         ledger.uncategorize(self.conn, [row])
         self.assertEqual(len(review.queue(self.conn)), 1)
+
+
+class ReviewAnswers(BooksCase):
+    """Two ways a slip at the prompt could book money wrongly and silently."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.ok("business", "add", "Business A")
+        self.ok("account", "add", "Chk", "--kind", "checking", "--date-format", "%Y-%m-%d")
+
+    def bring_in(self, name: str, *rows: str) -> None:
+        self.ok("import", "Chk", str(self.write(name, "Date,Description,Amount\n" + "\n".join(rows) + "\n")))
+
+    def booked(self) -> list:
+        return [row[0] for row in self.conn.execute("SELECT category_id FROM transactions WHERE category_id IS NOT NULL")]
+
+    def test_a_letter_or_two_books_nothing(self) -> None:
+        self.bring_in("a.csv", "2025-01-02,CLIENT DEPOSIT,5000.00")
+        for answer in ("a", "r", "w", "u", "ad", "a a", "r w"):
+            out = self.ok("review", stdin=f"{answer}\nq\n")
+            self.assertEqual(self.booked(), [], answer)
+            self.assertTrue("too short" in out or "needs a category" in out, f"{answer}: {out}")
+
+    def test_three_letters_book_and_every_answer_says_what_it_did(self) -> None:
+        self.bring_in("a.csv", "2025-01-02,CAFE ONE,-1.00", "2025-01-03,TEA TWO,-2.00", "2025-01-04,BANK NOTE,-3.00")
+        out = self.ok("review", stdin="Mea\n6120\nt\n")
+        self.assertIn("1 row(s) booked to 6150 Meals", out)
+        self.assertIn("1 row(s) booked to 6120 Supplies", out)
+        self.assertIn("1 row(s) booked to 3900 Transfer", out)
+
+    def test_a_rule_from_review_reaches_no_further_than_the_merchant_shown(self) -> None:
+        self.bring_in("a.csv", "2025-01-02,PAYMENT - THANK YOU,500.00", "2025-01-03,PAYMENT - THANK YOU,600.00")
+        out = self.ok("review", stdin="r 3900\n")
+        self.assertIn("2 row(s) booked to 3900 Transfer", out)
+        self.bring_in(
+            "b.csv",
+            "2025-02-02,ACH CREDIT HARBOR DENTAL PAYMENT INV 77,5000.00",
+            "2025-02-03,PAYMENT - THANK YOU,700.00",
+        )
+        rows = dict(self.conn.execute("SELECT description, category_source FROM transactions WHERE posted_on >= '2025-02-01'").fetchall())
+        self.assertIsNone(rows["ACH CREDIT HARBOR DENTAL PAYMENT INV 77"])
+        self.assertEqual(rows["PAYMENT - THANK YOU"], "rule")
+
+    def test_an_exact_rule_covers_the_merchant_however_the_bank_decorates_it(self) -> None:
+        self.bring_in("a.csv", "2025-01-02,SQ *BLUE FERN CAFE 0115 OGDEN UT,-1.00")
+        self.ok("review", stdin="r 6150\n")
+        self.bring_in("b.csv", "2025-02-02,BLUE FERN CAFE 0211 PROVO UT,-2.00")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM transactions WHERE category_id IS NULL").fetchone()[0], 0)
+
+    def test_a_command_line_category_needs_three_letters_too(self) -> None:
+        self.bring_in("a.csv", "2025-01-02,CAFE,-1.00")
+        self.assertIn("too short", self.fails("categorize", "M", "1"))
+        self.ok("categorize", "Mea", "1")
+
+    def test_a_bank_id_repeated_in_one_file_is_called_out(self) -> None:
+        text = "<OFX><STMTTRN><DTPOSTED>20250102<TRNAMT>-1.00<FITID>SAME<NAME>CAFE</STMTTRN><STMTTRN><DTPOSTED>20250102<TRNAMT>-1.00<FITID>SAME<NAME>CAFE</STMTTRN></OFX>"
+        path = self.write("x.ofx", "OFXHEADER:100\n\n" + text)
+        self.assertIn("appears more than once", self.ok("import", "Chk", str(path)))
+

@@ -291,6 +291,17 @@ class Salvage(Filled):
         conn.close()
         self.assertEqual(row, (None, None, None))
 
+    def test_it_never_claims_more_lost_rows_than_the_file_could_hold(self) -> None:
+        smash_table_page(self.db_path, "transactions")
+        out = self.run_cli("salvage", str(self.dir / "saved.sqlite3"))[1]
+        for line in out.splitlines():
+            if "could not be read" in line and "up to" in line:
+                self.assertLessEqual(int(line.split("up to ")[1].split()[0]), 3000, line)
+
+    def test_a_missing_file_is_called_missing(self) -> None:
+        self.db_path.unlink()
+        self.assertIn("no books at", self.fails("salvage", str(self.dir / "saved.sqlite3")))
+
     def test_it_never_overwrites(self) -> None:
         target = self.dir / "saved.sqlite3"
         target.write_bytes(b"precious")

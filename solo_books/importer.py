@@ -305,6 +305,11 @@ def _insert_rows(
             result.conflicts.append(verdict.detail)
             continue
 
+        if row.reference and verdict.occurrence > 1:
+            result.row_warnings.append(
+                f"Line {row.line}: bank id {row.reference!r} appears more than once in this file. Each was kept as its own "
+                f"row. If that doubled something, remove the extra with 'txn delete'."
+            )
         merchant = merchant_key(row.description)
         rule = first_match(rules, account["id"], row.description, row.memo, merchant, row.amount_cents)
         _warn_near_duplicate(conn, account, row, verdict.key, result)

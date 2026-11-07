@@ -151,7 +151,8 @@ python -m solo_books rules add --business "Business B" --contains "OWNER DRAW" -
 
 Work through the rest, a row at a time in the terminal. At the first row (a cafe) type `r 6150`: that books every
 queued row from that merchant to Meals and makes a rule for the future. At the next merchant (a hardware store)
-type `r 6110`. Type `?` at any time for the other answers.
+type `r 6110`. Each answer prints what it booked. Type `?` at any time for the other answers. A category can be named by
+its code, or by at least three letters of its name.
 
 ```bash
 python -m solo_books review
@@ -336,8 +337,9 @@ quotes around it would otherwise be misread.
 
 A row is the same row in a later export if it has the same bank id, or the same date, amount and text (ignoring case
 and spacing). Two identical rows on one day stay two rows, because two coffees are real, and importing the file again
-still leaves two. You get a warning about them, and another if a new row looks like an old one with reworded text,
-since that is your call rather than the program's.
+still leaves two. You get a warning about them, and another if a new row has the same amount as an old one within three
+days and the merchant reads the same, since that is your call rather than the program's. A bank that rewords a row
+more heavily than that between exports gets past this check, and it then shows up as a difference at reconciliation.
 
 If a bank id shows up with a different amount, or a date more than a week away, the import stops and shows both rows.
 That usually means the column is a row number rather than a real id, and `account map NAME --no-reference-col` drops it.
@@ -359,7 +361,10 @@ python -m solo_books imports list
 ### Rules
 
 Rules run in priority order, lowest number first, and the first match wins. Each has one match type:
-`--contains`, `--starts`, `--exact` or `--regex`, none of them case-sensitive. A rule can be limited with
+`--contains`, `--starts`, `--exact` or `--regex`, none of them case-sensitive. `--exact` means the whole description, or
+the merchant name as `rules test` reads it. A rule made with `r` at the review prompt, or with the box on the web page, is
+an exact rule on the merchant, so it reaches no further than the group you saw. A short `--contains` reaches much
+further: `PAYMENT` catches every row with that word in it. A rule can be limited with
 `--direction in` or `out`, `--min`, `--max` and `--account`.
 
 ```bash

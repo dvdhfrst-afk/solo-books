@@ -92,3 +92,40 @@ class Repo(unittest.TestCase):
     def test_sample_data_stays_synthetic(self) -> None:
         for path in (REPO_ROOT / "samples").rglob("*.csv"):
             self.assertRegex(path.name, r"^(example-|rules-|statement)", str(path))
+
+    def test_the_version_is_stated_once_and_agrees(self) -> None:
+        import solo_books
+
+        pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn(f'version = "{solo_books.__version__}"', pyproject)
+        self.assertIn(f"## {solo_books.__version__}", (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+
+    def test_every_layout_is_documented_and_has_a_sample(self) -> None:
+        from solo_books.layouts import load_layouts
+
+        doc = (REPO_ROOT / "docs" / "BANK-LAYOUTS.md").read_text(encoding="utf-8")
+        for layout_id in load_layouts():
+            self.assertIn(f"`{layout_id}`", doc)
+            self.assertTrue((REPO_ROOT / "samples" / "layouts" / f"example-{layout_id}.csv").is_file(), layout_id)
+
+    def test_links_between_documents_lead_somewhere(self) -> None:
+        for name in ("README.md", "SECURITY.md", "CONTRIBUTING.md", "CHANGELOG.md", "docs/BANK-LAYOUTS.md", "docs/RECOVERY.md", "docs/TESTING.md"):
+            text = (REPO_ROOT / name).read_text(encoding="utf-8")
+            for target in re.findall(r"\]\(([^)#]+\.md)\)", text):
+                self.assertTrue((REPO_ROOT / name).parent.joinpath(target).is_file(), f"{name}: {target}")
+            for target in re.findall(r"`((?:docs|samples|tests|solo_books)/[\w./-]+\.\w+)`", text):
+                self.assertTrue((REPO_ROOT / target).is_file(), f"{name}: {target}")
+
+    def test_the_program_points_at_documents_that_exist(self) -> None:
+        for path in (REPO_ROOT / "solo_books").rglob("*"):
+            if path.suffix in (".py", ".json"):
+                for target in re.findall(r"docs/[A-Z-]+\.md", path.read_text(encoding="utf-8")):
+                    self.assertTrue((REPO_ROOT / target).is_file(), f"{path.name}: {target}")
+
+    def test_every_doc_command_parses(self) -> None:
+        parser = build_parser()
+        for name in ("docs/BANK-LAYOUTS.md", "docs/RECOVERY.md", "docs/TESTING.md", "CONTRIBUTING.md"):
+            text = (REPO_ROOT / name).read_text(encoding="utf-8")
+            for line in re.findall(r"^python -m solo_books (.+)$", text, re.M):
+                parser.parse_args(shlex.split(line))
+

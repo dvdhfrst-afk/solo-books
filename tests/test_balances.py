@@ -130,7 +130,7 @@ class Balances(BooksCase):
         self.assertIn("1 row(s) dated before an account's opening date", out)
         self.assertEqual(self._money("--period", "2025")["Money at the end"], "1050.00")
 
-    def test_inventory_shows_only_at_a_year_end_with_a_count(self) -> None:
+    def test_inventory_shows_only_on_december_31_with_a_count(self) -> None:
         self.ok("inventory", "set", "--year", "2025", "--beginning", "10.00", "--ending", "75.00")
         self.assertIn("Money plus inventory: 1,025.00", self.ok("report", "balances", "--period", "2025"))
         self.assertNotIn("Inventory count", self.ok("report", "balances", "--period", "2025-Q1"))

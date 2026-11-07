@@ -997,7 +997,9 @@ def cmd_salvage(args) -> int:
     for table, count in sorted(outcome.copied.items()):
         print(f"  {table}: {count} row(s) copied")
     for table, count in sorted(outcome.unreadable.items()):
-        print(f"  {table}: {count} row(s) could not be read")
+        print(f"  {table}: up to {count} row(s) could not be read")
+    for table in sorted(outcome.unknown_loss):
+        print(f"  {table}: part of this table could not be read, and the file cannot say how many rows that was")
     for table, count in sorted(outcome.refused.items()):
         print(f"  {table}: {count} row(s) were too damaged to keep")
     if outcome.detached:

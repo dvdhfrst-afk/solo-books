@@ -37,6 +37,12 @@ First version meant for other people's real books.
 - A regular expression that could hang was accepted as a rule.
 - Terminal escape codes in a description reached the screen.
 - Importing was slow in a month with many rows of the same amount range.
+- One or two letters at the review prompt could book a row to whichever category started with them, without a word. A
+  name start now needs three letters, and every answer prints what it booked.
+- A rule made at review or on the web page was a "contains" rule on the merchant, so a short name such as PAYMENT caught
+  other payees' rows. It is now an exact rule on the merchant, and `--exact` also compares the merchant name.
+- `salvage` could report thousands of lost rows from a small file.
+- A bank id repeated within one file now gets a warning.
 
 ## 0.x
 

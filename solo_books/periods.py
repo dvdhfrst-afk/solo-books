@@ -86,7 +86,7 @@ def split_period(period: Period, by: str) -> List[Period]:
     if by == "total":
         return [Period(period.start, period.end, "Total")]
     if by not in ("month", "quarter", "year"):
-        raise BooksError(f"cannot split by {by!r}")
+        raise BooksError(f"cannot group by {by!r}")
 
     buckets: List[Period] = []
     year, month = period.start.year, period.start.month

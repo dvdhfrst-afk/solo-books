@@ -564,7 +564,8 @@ def suggest_mapping(path: Path) -> Tuple[Mapping, List[str]]:
     if status_at is not None:
         mapping.status_column = header[status_at]
 
-    samples = [row[date_at].strip() for row in rows[header_at + 1:] if len(row) > date_at and row[date_at].strip()]
+    # Footers such as "Total" sit in the date column too, and every real date starts with a digit.
+    samples = [row[date_at].strip() for row in rows[header_at + 1:] if len(row) > date_at and row[date_at].strip()[:1].isdigit()]
     fits = [fmt for fmt in _DATE_FORMATS if samples and all(_fits(s, fmt) for s in samples)]
     if fits:
         mapping.date_format = fits[0]

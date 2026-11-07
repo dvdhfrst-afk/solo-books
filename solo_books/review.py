@@ -60,7 +60,8 @@ def book_rows(
     result = {"booked": 0, "by_rule": 0, "rule_id": None}
     with transaction(conn):
         if rule_pattern:
-            result["rule_id"] = add_rule(conn, business_id, "contains", rule_pattern, category)
+            # Exactly this merchant. "contains" would let a short name such as PAYMENT catch other people's rows.
+            result["rule_id"] = add_rule(conn, business_id, "exact", rule_pattern, category)
             hold_back(conn, result["rule_id"], held_back)
             result["by_rule"] = apply_rules(conn, business_id)["categorized"]
         still_open = [
@@ -74,9 +75,9 @@ def book_rows(
     return result
 
 
-HELP = """  CODE or NAME   book this row to that category
+HELP = """  CODE or NAME   book this row to that category (three letters of the name are enough if only one fits)
   a CODE         book this row and every queued row from the same merchant
-  r CODE         same as a, and make a rule so future rows book themselves
+  r CODE         same as a, and make a rule so future rows from exactly this merchant book themselves
   t              book this row to Transfer (card payments, moves between accounts)
   l              list categories
   s              skip for now
@@ -130,21 +131,26 @@ def run_interactive(
             for category in list_categories(conn, row["business_id"]):
                 write(f"  {category['code']}  {category['name']}")
             continue
+        if lowered in ("a", "r"):
+            write(f"  {lowered} needs a category after it, such as: {lowered} 6150. Type ? for help.")
+            continue
         try:
             if lowered == "t":
                 category = _transfer_category(conn, row["business_id"])
-                totals["booked"] += categorize(conn, [row["id"]], category)
+                booked = categorize(conn, [row["id"]], category)
             elif lowered.startswith("a "):
                 category = find_category(conn, row["business_id"], answer[2:])
-                totals["booked"] += categorize(conn, same, category)
+                booked = categorize(conn, same, category)
             elif lowered.startswith("r "):
                 category = find_category(conn, row["business_id"], answer[2:])
                 outcome = book_rows(conn, row["business_id"], same, category, rule_pattern=row["merchant"])
-                totals["booked"] += outcome["booked"] + outcome["by_rule"]
-                write(f"  rule added: contains {row['merchant']!r} -> {category['code']} {category['name']}")
+                booked = outcome["booked"] + outcome["by_rule"]
+                write(f"  rule added: merchant is exactly {row['merchant']!r}")
             else:
                 category = find_category(conn, row["business_id"], answer)
-                totals["booked"] += categorize(conn, [row["id"]], category)
+                booked = categorize(conn, [row["id"]], category)
+            totals["booked"] += booked
+            write(f"  {booked} row(s) booked to {category['code']} {category['name']}")
         except BooksError as exc:
             write(f"  {exc}")
     return totals

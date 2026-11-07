@@ -7,7 +7,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Set, Tuple
 
 from .db import APPLICATION_ID, BUSY_SECONDS, connect, friendly_error, schema_version
 from .csvmap import Mapping
@@ -275,13 +275,14 @@ def restore(books_path: Path, backup_path: Path) -> Optional[Path]:
 class SalvageReport:
     copied: Dict[str, int] = field(default_factory=dict)
     unreadable: Dict[str, int] = field(default_factory=dict)
+    unknown_loss: Set[str] = field(default_factory=set)
     refused: Dict[str, int] = field(default_factory=dict)
     detached: int = 0
     removed: int = 0
 
     @property
     def lost_anything(self) -> bool:
-        return bool(self.unreadable or self.refused or self.removed)
+        return bool(self.unreadable or self.unknown_loss or self.refused or self.removed)
 
 
 def _readable_rows(source: sqlite3.Connection, table: str, report: SalvageReport) -> Iterator[sqlite3.Row]:
@@ -310,7 +311,11 @@ def _readable_rows(source: sqlite3.Connection, table: str, report: SalvageReport
             try:
                 row = source.execute(f"SELECT rowid AS rowid_, * FROM {quoted} WHERE rowid = ?", (probe,)).fetchone()
             except sqlite3.DatabaseError:
-                report.unreadable[table] = report.unreadable.get(table, 0) + 1
+                # Without a known last row, these misses say nothing about how many rows there were.
+                if top is None:
+                    report.unknown_loss.add(table)
+                else:
+                    report.unreadable[table] = report.unreadable.get(table, 0) + 1
                 row = None
             if row is not None:
                 yield row
@@ -350,6 +355,8 @@ def salvage(damaged: Path, destination: Path) -> SalvageReport:
     damaged, destination = Path(damaged), Path(destination)
     if destination.exists():
         raise BooksError(f"{destination} already exists. Choose a new file name.")
+    if not damaged.is_file():
+        raise BooksError(f"no books at {damaged}.")
     if not looks_like_sqlite(damaged):
         raise BooksError(f"{damaged} no longer starts like a database, so nothing can be read from it. Restore a backup instead.")
     report = SalvageReport()

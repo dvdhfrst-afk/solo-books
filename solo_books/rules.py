@@ -53,7 +53,7 @@ class Rule:
             return bool(self._regex.search(text) or (memo and self._regex.search(normalize_description(memo))))
         wanted = normalize_description(self.pattern)
         if self.match_type == "exact":
-            return text == wanted
+            return text == wanted or merchant == wanted
         if self.match_type == "starts":
             return text.startswith(wanted)
         # A merchant name can skip a store number that sits between its words, so check it too.
