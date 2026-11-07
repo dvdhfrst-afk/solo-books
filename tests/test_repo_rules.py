@@ -44,9 +44,9 @@ class Repo(unittest.TestCase):
 
     def test_only_the_standard_library_is_imported(self) -> None:
         allowed = {
-            "argparse", "ast", "calendar", "contextlib", "csv", "dataclasses", "datetime", "hashlib", "http",
-            "io", "json", "os", "pathlib", "re", "secrets", "shlex", "shutil", "sqlite3", "subprocess", "sys", "tempfile",
-            "threading", "typing", "unittest", "urllib", "webbrowser", "collections", "__future__",
+            "argparse", "ast", "calendar", "codecs", "contextlib", "csv", "dataclasses", "datetime", "hashlib", "html", "http",
+            "io", "json", "os", "pathlib", "re", "secrets", "shlex", "shutil", "socket", "sqlite3", "stat", "subprocess", "sys", "tempfile",
+            "threading", "time", "typing", "unittest", "urllib", "webbrowser", "collections", "__future__",
             "solo_books", "tests",
         }
         for path in python_files():

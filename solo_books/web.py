@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import sqlite3
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Optional
-from urllib.parse import urlparse
+from typing import Callable, Optional
+from urllib.parse import parse_qs, urlparse
 
 from .books import find_category, list_businesses, list_categories
-from .db import connect, transaction
+from .db import connect, friendly_error, transaction
 from .errors import BooksError
 from .ledger import get_transaction, uncategorize
 from .money import format_cents
@@ -17,8 +20,14 @@ from .review import book_rows, group_rows, queue
 from .rules import delete_rule
 
 PAGE_PATH = Path(__file__).resolve().parent / "data" / "review.html"
-MAX_BODY_BYTES = 1_000_000
+MAX_BODY_BYTES = 8_000_000
 LOCAL_ADDRESS = "127.0.0.1"
+# One stalled connection must not hold a thread forever.
+REQUEST_TIMEOUT_SECONDS = 30
+
+
+def _is_id_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(item, int) and not isinstance(item, bool) for item in value)
 
 
 def queue_payload(conn) -> dict:
@@ -63,7 +72,7 @@ def queue_payload(conn) -> dict:
 
 def categorize_request(conn, body: dict) -> dict:
     ids = body.get("ids")
-    if not isinstance(ids, list) or not ids or not all(isinstance(i, int) for i in ids):
+    if not _is_id_list(ids) or not ids:
         raise BooksError("ids must be a list of transaction numbers")
     if not isinstance(body.get("category"), str):
         raise BooksError("category is required")
@@ -73,7 +82,7 @@ def categorize_request(conn, body: dict) -> dict:
     if pattern is not None and not isinstance(pattern, str):
         raise BooksError("rule_pattern must be text")
     unticked = body.get("unticked_ids", [])
-    if not isinstance(unticked, list) or not all(isinstance(i, int) for i in unticked):
+    if not _is_id_list(unticked):
         raise BooksError("unticked_ids must be a list of transaction numbers")
     result = book_rows(conn, business_id, ids, category, rule_pattern=pattern, held_back=unticked)
     result["category"] = f"{category['code']} {category['name']}"
@@ -84,10 +93,10 @@ def categorize_request(conn, body: dict) -> dict:
 def undo_request(conn, body: dict) -> dict:
     """Put rows back in the queue; if the action made a rule, remove it and what it booked."""
     ids = body.get("ids")
-    if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
+    if not _is_id_list(ids):
         raise BooksError("ids must be a list of transaction numbers")
     rule_id = body.get("rule_id")
-    if rule_id is not None and not isinstance(rule_id, int):
+    if rule_id is not None and (not isinstance(rule_id, int) or isinstance(rule_id, bool)):
         raise BooksError("rule_id must be a number")
     with transaction(conn):
         count = uncategorize(conn, ids)
@@ -102,6 +111,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
     server: "ReviewServer"
     server_version = "solo-books"
     sys_version = ""
+    timeout = REQUEST_TIMEOUT_SECONDS
 
     def log_message(self, format: str, *args) -> None:
         if self.server.verbose:
@@ -128,12 +138,35 @@ class ReviewHandler(BaseHTTPRequestHandler):
     def _json(self, status: int, data: dict) -> None:
         self._send(status, json.dumps(data).encode("utf-8"), "application/json")
 
+    def _token_ok(self, offered: str) -> bool:
+        return secrets.compare_digest(offered.encode("utf-8", "replace"), self.server.token.encode("utf-8"))
+
+    def _answer_from_books(self, work: Callable) -> None:
+        """Open the books for one request and turn any failure into a plain answer for the page."""
+        try:
+            conn = connect(self.server.db_path)
+            try:
+                self._json(200, work(conn))
+            finally:
+                conn.close()
+        except BooksError as exc:
+            self._json(400, {"error": str(exc)})
+        except sqlite3.Error as exc:
+            self._json(503, {"error": str(friendly_error(self.server.db_path, exc))})
+        except OverflowError:
+            self._json(400, {"error": "a number in the request is too large"})
+
     def do_GET(self) -> None:
         if not self._host_allowed():
             self._json(403, {"error": "this page only answers on the local address"})
             return
-        route = urlparse(self.path).path
+        parts = urlparse(self.path)
+        route = parts.path
         if route == "/":
+            # The address printed at startup carries a key, so another account on this computer cannot read the queue.
+            if not self._token_ok(parse_qs(parts.query).get("key", [""])[0]):
+                self._json(403, {"error": "use the full address the 'web' command printed"})
+                return
             page = PAGE_PATH.read_text(encoding="utf-8")
             nonce = secrets.token_urlsafe(16)
             page = page.replace("__TOKEN__", self.server.token).replace("__NONCE__", nonce)
@@ -144,11 +177,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._send(200, page.encode("utf-8"), "text/html; charset=utf-8", {"Content-Security-Policy": policy})
             return
         if route == "/api/queue":
-            conn = connect(self.server.db_path)
-            try:
-                self._json(200, queue_payload(conn))
-            finally:
-                conn.close()
+            if not self._token_ok(self.headers.get("X-Solo-Books-Token", "")):
+                self._json(403, {"error": "missing or wrong page token; reload the page"})
+                return
+            self._answer_from_books(queue_payload)
             return
         self._json(404, {"error": "not found"})
 
@@ -167,8 +199,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._json(403, {"error": "this page only answers on the local address"})
             return
         # Another site can make a browser send a POST here, but it cannot read the page to learn this token.
-        offered = self.headers.get("X-Solo-Books-Token", "").encode("utf-8", "replace")
-        if not secrets.compare_digest(offered, self.server.token.encode("utf-8")):
+        if not self._token_ok(self.headers.get("X-Solo-Books-Token", "")):
             self._json(403, {"error": "missing or wrong page token; reload the page"})
             return
         route = urlparse(self.path).path
@@ -184,16 +215,14 @@ class ReviewHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._json(400, {"error": f"bad JSON: {exc}"})
             return
-        conn = connect(self.server.db_path)
-        try:
-            self._json(200, handler(conn, body))
-        except BooksError as exc:
-            self._json(400, {"error": str(exc)})
-        finally:
-            conn.close()
+        self._answer_from_books(lambda conn: handler(conn, body))
 
 
-class ReviewServer(HTTPServer):
+class ReviewServer(ThreadingHTTPServer):
+    daemon_threads = True
+    # On Windows this option would let a second server share the port and answer in the first one's place.
+    allow_reuse_address = os.name != "nt"
+
     def __init__(self, db_path: Path, port: int = 0, verbose: bool = False) -> None:
         self.db_path = Path(db_path)
         self.verbose = verbose
@@ -202,4 +231,10 @@ class ReviewServer(HTTPServer):
 
     @property
     def url(self) -> str:
-        return f"http://{LOCAL_ADDRESS}:{self.server_address[1]}/"
+        return f"http://{LOCAL_ADDRESS}:{self.server_address[1]}/?key={self.token}"
+
+    def handle_error(self, request, client_address) -> None:
+        """A browser closing a tab mid-answer is normal, and anything else is not worth a stack trace on screen."""
+        kind, error, _ = sys.exc_info()
+        if self.verbose and kind is not None:
+            print(f"solo-books: request failed: {kind.__name__}: {error}", file=sys.stderr)

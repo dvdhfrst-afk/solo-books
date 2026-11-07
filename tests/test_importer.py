@@ -193,7 +193,7 @@ class SafeReimport(BooksCase):
         importer.import_export(self.conn, self.acct, self.write("a.csv", before))
         result = importer.import_export(self.conn, self.acct, self.write("b.csv", after))
         self.assertEqual(result.rows_new, 1)
-        self.assertTrue(any("Possible duplicate" in w for w in result.warnings))
+        self.assertTrue(any("Possible duplicate" in w for w in result.row_warnings))
 
     def test_bad_row_stops_the_whole_file(self) -> None:
         path = self.write("a.csv", BANK + "13/45/2025,BAD DATE,-1.00\n")

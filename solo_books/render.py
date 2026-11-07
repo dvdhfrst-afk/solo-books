@@ -4,20 +4,24 @@ from __future__ import annotations
 import csv
 import io
 import sys
+from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Set
 
+from .files import write_atomic
 from .money import format_cents, plain_cents
 from .reconcile import ReconcileReport, printed
 from .reports import NOT_ADVICE, Balances, Pnl, PnlRow, ScheduleC, ScheduleLine
-from .text import spreadsheet_safe
+from .text import spreadsheet_cell, spreadsheet_safe
 
 _MAX_CELL = 46
 
 
-def table(headers: Sequence[str], rows: Iterable[Sequence[str]], right: Optional[Set[int]] = None) -> str:
+def table(
+    headers: Sequence[str], rows: Iterable[Sequence[str]], right: Optional[Set[int]] = None, max_cell: int = _MAX_CELL
+) -> str:
     """A plain aligned table. Columns in right are right-aligned."""
     right = right or set()
-    body = [[_clip(str(cell)) for cell in row] for row in rows]
+    body = [[_clip(str(cell), max_cell) for cell in row] for row in rows]
     widths = [len(h) for h in headers]
     for row in body:
         for index, cell in enumerate(row):
@@ -35,23 +39,24 @@ def table(headers: Sequence[str], rows: Iterable[Sequence[str]], right: Optional
     return "\n".join(out)
 
 
-def _clip(text: str) -> str:
-    return text if len(text) <= _MAX_CELL else text[: _MAX_CELL - 3] + "..."
+def _clip(text: str, limit: int = _MAX_CELL) -> str:
+    return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 def csv_text(headers: Sequence[str], rows: Iterable[Sequence[str]]) -> str:
     out = io.StringIO(newline="")
     writer = csv.writer(out, lineterminator="\n")
     writer.writerow(headers)
-    writer.writerows(rows)
+    for row in rows:
+        # Text from a bank or a name typed long ago must not run as a formula. Numbers stay numbers.
+        writer.writerow([spreadsheet_cell(cell) for cell in row])
     return out.getvalue()
 
 
 def deliver(text: str, output: Optional[str]) -> None:
     """Write to a file (with a byte order mark so spreadsheets read accents right) or to the screen."""
     if output:
-        with open(output, "w", encoding="utf-8-sig", newline="") as handle:
-            handle.write(text)
+        write_atomic(Path(output), ("\ufeff" + text).encode("utf-8"))
     else:
         sys.stdout.write(text if text.endswith("\n") else text + "\n")
 

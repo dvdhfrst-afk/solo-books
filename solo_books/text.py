@@ -27,6 +27,21 @@ _PREFIXES = (
 
 _MAX_MERCHANT_WORDS = 3
 
+# Bytes that steer a terminal or reorder text on screen. A hostile file must not be able to do either.
+_INVISIBLE = re.compile("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f-\\x9f\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]")
+_LINE_BREAKS = re.compile("[\\t\\r\\n\\u2028\\u2029]+")
+_PLAIN_NUMBER = re.compile(r"^[-+]?\d[\d,]*(\.\d+)?$")
+
+
+def printable(text: str) -> str:
+    """Drop control characters but keep line breaks, for anything about to reach a terminal."""
+    return _INVISIBLE.sub("", text)
+
+
+def clean_cell(text: str) -> str:
+    """One line of plain text from whatever a bank's file held in a cell."""
+    return _LINE_BREAKS.sub(" ", _INVISIBLE.sub("", text)).strip()
+
 
 def normalize_description(text: str) -> str:
     """Uppercase with runs of whitespace collapsed; the form used for comparing rows."""
@@ -63,11 +78,23 @@ def merchant_key(description: str) -> str:
 
 def spreadsheet_safe(text: str) -> str:
     """Stop a description from being run as a formula when a CSV opens in a spreadsheet."""
-    if text[:1] in ("=", "+", "-", "@", "\t", "\r"):
+    if text.lstrip(" \t\r\n")[:1] in ("=", "+", "-", "@") or text[:1] in ("\t", "\r"):
         return "'" + text
     return text
 
 
+def spreadsheet_cell(text: str) -> str:
+    """The same, for a cell that may hold a plain number, which must stay a number."""
+    return text if _PLAIN_NUMBER.match(text) else spreadsheet_safe(text)
+
+
+def from_spreadsheet_safe(text: str) -> str:
+    """Undo spreadsheet_safe, for a file this program wrote and is reading back."""
+    if text.startswith("'") and text[1:].lstrip(" \t\r\n")[:1] in ("=", "+", "-", "@"):
+        return text[1:]
+    return text
+
+
 def slug(text: str) -> str:
-    """Business A becomes business-a, for file names."""
-    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "business"
+    """Business A becomes business-a, for file names. Letters of any alphabet stay; separators never do."""
+    return re.sub(r"[\W_]+", "-", text.lower()).strip("-") or "business"

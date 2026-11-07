@@ -9,7 +9,8 @@ from .books import require_usable
 from .db import transaction
 from .errors import BooksError
 from .periods import Period
-from .text import merchant_key, normalize_description
+from .money import MAX_CENTS
+from .text import clean_cell, merchant_key, normalize_description
 
 _SELECT = (
     "SELECT t.*, a.name AS account_name, a.business_id AS business_id, b.name AS business_name,"
@@ -116,10 +117,7 @@ def add_manual(
     note: str = "",
 ) -> int:
     """Add a row by hand. If the same row later arrives in an export, it is not doubled."""
-    if amount_cents == 0:
-        raise BooksError("an amount of zero does not move a balance")
-    if not description.strip():
-        raise BooksError("a transaction needs a description")
+    description = _check_entry(amount_cents, description)
     if category is not None:
         _check_category(account["business_id"], category)
     natural = natural_key(posted_on, amount_cents, description)
@@ -136,17 +134,64 @@ def add_manual(
                 account["id"],
                 posted_on.isoformat(),
                 amount_cents,
-                description.strip(),
+                description,
                 merchant_key(description),
                 key,
                 natural,
                 taken + 1,
                 category["id"] if category is not None else None,
                 "manual" if category is not None else None,
-                note,
+                clean_cell(note),
             ),
         )
     return cursor.lastrowid
+
+
+def _check_entry(amount_cents: int, description: str) -> str:
+    if amount_cents == 0:
+        raise BooksError("an amount of zero does not move a balance")
+    if abs(amount_cents) > MAX_CENTS:
+        raise BooksError("that amount is too large to be a real row")
+    description = clean_cell(description)
+    if not description:
+        raise BooksError("a transaction needs a description")
+    return description
+
+
+def edit_manual(
+    conn: sqlite3.Connection,
+    transaction_id: int,
+    posted_on: Optional[date] = None,
+    amount_cents: Optional[int] = None,
+    description: Optional[str] = None,
+) -> None:
+    """Correct a row added by hand. A row from a bank file stays as the bank wrote it."""
+    row = get_transaction(conn, transaction_id)
+    if row["reconciliation_id"] is not None:
+        raise BooksError(
+            f"transaction {transaction_id} is part of finished reconciliation {row['reconciliation_id']}. "
+            "Reopen that reconciliation first."
+        )
+    if row["import_id"] is not None or live_imports_holding(conn, transaction_id):
+        raise BooksError(
+            f"transaction {transaction_id} came from a bank file, so it stays as the bank wrote it. "
+            "To correct it, delete it with 'txn delete' and add the right row with 'txn add'. Notes and categories can still change."
+        )
+    day = posted_on or date.fromisoformat(row["posted_on"])
+    amount = row["amount_cents"] if amount_cents is None else amount_cents
+    text = _check_entry(amount, row["description"] if description is None else description)
+    natural = natural_key(day, amount, text)
+    key = plain_key(natural)
+    with transaction(conn):
+        taken = conn.execute(
+            "SELECT COALESCE(MAX(occurrence), 0) FROM transactions WHERE account_id = ? AND dedupe_key = ? AND id != ?",
+            (row["account_id"], key, transaction_id),
+        ).fetchone()[0]
+        conn.execute(
+            "UPDATE transactions SET posted_on = ?, amount_cents = ?, description = ?, merchant = ?,"
+            " dedupe_key = ?, natural_key = ?, occurrence = ? WHERE id = ?",
+            (day.isoformat(), amount, text, merchant_key(text), key, natural, taken + 1, transaction_id),
+        )
 
 
 def delete_transaction(conn: sqlite3.Connection, transaction_id: int) -> None:
@@ -203,7 +248,7 @@ def uncategorize(conn: sqlite3.Connection, transaction_ids: Iterable[int]) -> in
 
 def set_note(conn: sqlite3.Connection, transaction_id: int, note: str) -> None:
     get_transaction(conn, transaction_id)
-    conn.execute("UPDATE transactions SET note = ? WHERE id = ?", (note, transaction_id))
+    conn.execute("UPDATE transactions SET note = ? WHERE id = ?", (clean_cell(note), transaction_id))
 
 
 def balance_through(conn: sqlite3.Connection, account: sqlite3.Row, through: date) -> Optional[int]:

@@ -63,14 +63,13 @@ def book_rows(
             result["rule_id"] = add_rule(conn, business_id, "contains", rule_pattern, category)
             hold_back(conn, result["rule_id"], held_back)
             result["by_rule"] = apply_rules(conn, business_id)["categorized"]
-        placeholders = ",".join("?" * len(transaction_ids))
         still_open = [
-            row["id"]
-            for row in conn.execute(
-                f"SELECT id FROM transactions WHERE id IN ({placeholders}) AND category_id IS NULL",
-                list(transaction_ids),
-            ).fetchall()
-        ] if transaction_ids else []
+            transaction_id
+            for transaction_id in transaction_ids
+            if conn.execute(
+                "SELECT 1 FROM transactions WHERE id = ? AND category_id IS NULL", (transaction_id,)
+            ).fetchone()
+        ]
         result["booked"] = categorize(conn, still_open, category)
     return result
 
@@ -94,9 +93,11 @@ def run_interactive(
 ) -> dict:
     """Walk the queue one row at a time. Each answer is saved as it is given."""
     totals = {"booked": 0, "skipped": 0}
-    skipped = set()
+    # The rows are read once. After that only what left the queue is looked up, so long queues answer quickly.
+    rows = queue(conn, business_id, account_id)
     while True:
-        rows = [row for row in queue(conn, business_id, account_id) if row["id"] not in skipped]
+        waiting = {found[0] for found in conn.execute("SELECT id FROM transactions WHERE category_id IS NULL")}
+        rows = [row for row in rows if row["id"] in waiting]
         if not rows:
             break
         row = rows[0]
@@ -122,7 +123,7 @@ def run_interactive(
             write(HELP)
             continue
         if lowered == "s":
-            skipped.add(row["id"])
+            rows.remove(row)
             totals["skipped"] += 1
             continue
         if lowered == "l":

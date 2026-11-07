@@ -10,6 +10,7 @@ from typing import List, Optional
 from .db import transaction
 from .errors import BooksError
 from .schedule_c import latest_form, load_form
+from .text import clean_cell
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 
@@ -17,12 +18,21 @@ CATEGORY_KINDS = ("income", "returns", "cogs", "expense", "transfer", "equity")
 ACCOUNT_KINDS = ("checking", "savings", "credit_card", "other")
 # Kinds that never reach profit and loss or a form line.
 OFF_FORM_KINDS = ("transfer", "equity")
+MAX_NAME = 120
+
+
+def _clean_name(name: str, what: str) -> str:
+    name = clean_cell(name)
+    if not name:
+        raise BooksError(f"{what} needs a name")
+    if len(name) > MAX_NAME:
+        raise BooksError(f"{what}'s name can be at most {MAX_NAME} characters")
+    return name
 
 
 def add_business(conn: sqlite3.Connection, name: str, activity: str = "") -> sqlite3.Row:
-    name = name.strip()
-    if not name:
-        raise BooksError("a business needs a name")
+    name = _clean_name(name, "a business")
+    activity = clean_cell(activity)
     if conn.execute("SELECT 1 FROM businesses WHERE name = ?", (name,)).fetchone():
         raise BooksError(f"there is already a business named {name!r}")
     chart = json.loads((DATA_DIR / "default_chart.json").read_text(encoding="utf-8"))
@@ -68,9 +78,8 @@ def add_account(
     opening_date: Optional[date] = None,
     mapping_json: Optional[str] = None,
 ) -> sqlite3.Row:
-    name = name.strip()
-    if not name:
-        raise BooksError("an account needs a name")
+    name = _clean_name(name, "an account")
+    institution = clean_cell(institution)
     if kind not in ACCOUNT_KINDS:
         raise BooksError(f"account kind must be one of: {', '.join(ACCOUNT_KINDS)}")
     if (opening_balance_cents is None) != (opening_date is None):
@@ -112,6 +121,52 @@ def get_account(conn: sqlite3.Connection, name: str) -> sqlite3.Row:
         names = ", ".join(r["name"] for r in list_accounts(conn)) or "none yet"
         raise BooksError(f"no account named {name!r} (have: {names})")
     return row
+
+
+def rename_business(conn: sqlite3.Connection, business: sqlite3.Row, new_name: str) -> str:
+    new_name = _clean_name(new_name, "a business")
+    clash = conn.execute("SELECT 1 FROM businesses WHERE name = ? AND id != ?", (new_name, business["id"])).fetchone()
+    if clash:
+        raise BooksError(f"there is already a business named {new_name!r}")
+    conn.execute("UPDATE businesses SET name = ? WHERE id = ?", (new_name, business["id"]))
+    return new_name
+
+
+def delete_business(conn: sqlite3.Connection, business: sqlite3.Row) -> None:
+    """Only a business with no accounts can go, so this can never take bank rows with it."""
+    accounts = list_accounts(conn, business["id"])
+    if accounts:
+        names = ", ".join(account["name"] for account in accounts)
+        raise BooksError(f"{business['name']} still has accounts: {names}. Delete those first.")
+    with transaction(conn):
+        conn.execute("DELETE FROM rules WHERE business_id = ?", (business["id"],))
+        conn.execute("DELETE FROM businesses WHERE id = ?", (business["id"],))
+
+
+def rename_account(conn: sqlite3.Connection, account: sqlite3.Row, new_name: str) -> str:
+    new_name = _clean_name(new_name, "an account")
+    clash = conn.execute("SELECT 1 FROM accounts WHERE name = ? AND id != ?", (new_name, account["id"])).fetchone()
+    if clash:
+        raise BooksError(f"there is already an account named {new_name!r}")
+    conn.execute("UPDATE accounts SET name = ? WHERE id = ?", (new_name, account["id"]))
+    return new_name
+
+
+def delete_account(conn: sqlite3.Connection, account: sqlite3.Row, with_rows: bool = False) -> int:
+    """Remove an account. Rows go with it only when asked for, and never once a period is locked."""
+    count = conn.execute("SELECT COUNT(*) FROM transactions WHERE account_id = ?", (account["id"],)).fetchone()[0]
+    if count and not with_rows:
+        raise BooksError(
+            f"{account['name']} holds {count} row(s). Pass --with-rows to delete them too. "
+            "Take a backup first: this cannot be undone."
+        )
+    finished = conn.execute(
+        "SELECT COUNT(*) FROM reconciliations WHERE account_id = ? AND status = 'finished'", (account["id"],)
+    ).fetchone()[0]
+    if finished:
+        raise BooksError(f"{account['name']} has {finished} finished reconciliation(s). Reopen them first.")
+    conn.execute("DELETE FROM accounts WHERE id = ?", (account["id"],))
+    return count
 
 
 def set_account_mapping(conn: sqlite3.Connection, account: sqlite3.Row, mapping_json: str) -> None:
@@ -192,8 +247,8 @@ def add_category(
     line: Optional[str] = None,
     year: Optional[int] = None,
 ) -> sqlite3.Row:
-    code, name = code.strip(), name.strip()
-    if not code or not name:
+    code, name = clean_cell(code), _clean_name(name, "a category")
+    if not code:
         raise BooksError("a category needs a code and a name")
     if kind not in CATEGORY_KINDS:
         raise BooksError(f"category kind must be one of: {', '.join(CATEGORY_KINDS)}")
@@ -224,9 +279,7 @@ def map_category(conn: sqlite3.Connection, category: sqlite3.Row, line: Optional
 
 
 def rename_category(conn: sqlite3.Connection, category: sqlite3.Row, new_name: str) -> None:
-    new_name = new_name.strip()
-    if not new_name:
-        raise BooksError("a category needs a name")
+    new_name = _clean_name(new_name, "a category")
     clash = conn.execute(
         "SELECT code FROM categories WHERE business_id = ? AND name = ? AND id != ?",
         (category["business_id"], new_name, category["id"]),

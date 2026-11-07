@@ -4,11 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solo-books"
-version = "0.1.0"
+version = "1.0.0"
 description = "Local bookkeeping for one person who owns one or more single-member LLCs."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
+keywords = ["bookkeeping", "llc", "schedule-c", "sqlite", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Topic :: Office/Business :: Financial :: Accounting",
+]
 dependencies = []
 
 [project.scripts]

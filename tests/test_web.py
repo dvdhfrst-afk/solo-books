@@ -42,10 +42,10 @@ class ReviewPage(BooksCase):
 
     def test_listens_only_on_the_local_address(self) -> None:
         self.assertEqual(self.server.server_address[0], "127.0.0.1")
-        self.assertEqual(self.server.url, f"http://127.0.0.1:{self.port}/")
+        self.assertEqual(self.server.url, f"http://127.0.0.1:{self.port}/?key={self.server.token}")
 
     def test_page_loads_with_a_tight_policy_and_no_outside_resources(self) -> None:
-        status, data, headers = self.request("GET", "/")
+        status, data, headers = self.request("GET", f"/?key={self.server.token}")
         page = data.decode("utf-8")
         self.assertEqual(status, 200)
         self.assertIn("Review queue", page)
@@ -56,7 +56,7 @@ class ReviewPage(BooksCase):
         self.assertNotIn("https://", page)
 
     def test_queue_groups_rows(self) -> None:
-        status, data, _ = self.request("GET", "/api/queue")
+        status, data, _ = self.request("GET", "/api/queue", headers={"X-Solo-Books-Token": self.server.token})
         queue = json.loads(data)
         self.assertEqual(status, 200)
         self.assertEqual(queue["remaining"], 3)
@@ -134,7 +134,7 @@ class ReviewPage(BooksCase):
         self.assertEqual(len(review.queue(self.conn)), 4)
 
     def test_the_page_sends_the_unticked_rows(self) -> None:
-        _, page, _ = self.request("GET", "/")
+        _, page, _ = self.request("GET", f"/?key={self.server.token}")
         self.assertIn(b"unticked_ids", page)
 
     def test_post_needs_the_page_token(self) -> None:
@@ -163,9 +163,57 @@ class ReviewPage(BooksCase):
 
     def test_description_reaches_the_page_as_data_only(self) -> None:
         ledger.add_manual(self.conn, self.acct, date(2025, 1, 5), -100, "<img src=x onerror=alert(1)>")
-        _, data, headers = self.request("GET", "/api/queue")
+        _, data, headers = self.request("GET", "/api/queue", headers={"X-Solo-Books-Token": self.server.token})
         self.assertIn("application/json", headers["Content-Type"])
         # The page builds rows with textContent, so this stays text.
-        _, page, _ = self.request("GET", "/")
+        _, page, _ = self.request("GET", f"/?key={self.server.token}")
         self.assertNotIn(b"innerHTML", page)
         self.assertIn(b"<img src=x", data)
+
+    def test_the_page_and_the_queue_need_the_key_from_startup(self) -> None:
+        self.assertEqual(self.request("GET", "/")[0], 403)
+        self.assertEqual(self.request("GET", "/?key=wrong")[0], 403)
+        self.assertEqual(self.request("GET", "/api/queue")[0], 403)
+        self.assertEqual(self.request("GET", "/api/queue", headers={"X-Solo-Books-Token": "wrong"})[0], 403)
+
+    def test_booleans_and_huge_numbers_are_refused_plainly(self) -> None:
+        for body in ({"ids": [True], "category": "6150"}, {"ids": [10 ** 30], "category": "6150"}, {"ids": [], "rule_id": True}):
+            route = "/api/undo" if "rule_id" in body else "/api/categorize"
+            status, result = self.post(route, body)
+            self.assertEqual(status, 400, body)
+            self.assertIn("error", result)
+
+    def test_a_hostile_description_reaches_the_page_only_as_data(self) -> None:
+        ledger.add_manual(self.conn, self.acct, date(2025, 1, 5), -100, "<img src=x onerror=alert(1)>")
+        page = self.request("GET", f"/?key={self.server.token}")[1].decode("utf-8")
+        self.assertNotIn("<img src=x", page)
+        self.assertNotIn(".innerHTML", page)
+        data = json.loads(self.request("GET", "/api/queue", headers={"X-Solo-Books-Token": self.server.token})[1])
+        found = [row["description"] for group in data["groups"] for row in group["rows"]]
+        self.assertIn("<img src=x onerror=alert(1)>", found)
+
+    def test_a_stalled_connection_does_not_block_the_next_person(self) -> None:
+        import socket
+
+        stalled = socket.create_connection(("127.0.0.1", self.port))
+        self.addCleanup(stalled.close)
+        stalled.sendall(b"POST /api/categorize HTTP/1.1\r\n")
+        self.assertEqual(self.request("GET", "/api/queue", headers={"X-Solo-Books-Token": self.server.token})[0], 200)
+
+    def test_damaged_books_answer_with_a_message_not_a_dropped_connection(self) -> None:
+        self.conn.close()
+        data = bytearray(self.db_path.read_bytes())
+        data[:16] = b"\x00" * 16
+        self.db_path.write_bytes(bytes(data))
+        status, body, _ = self.request("GET", "/api/queue", headers={"X-Solo-Books-Token": self.server.token})
+        self.assertEqual(status, 400)
+        self.assertIn("damaged", json.loads(body)["error"])
+
+    def test_the_same_port_cannot_be_taken_twice(self) -> None:
+        with self.assertRaises(OSError):
+            ReviewServer(self.db_path, port=self.port)
+
+    def test_a_long_queue_is_drawn_in_pages(self) -> None:
+        page = self.request("GET", f"/?key={self.server.token}")[1].decode("utf-8")
+        self.assertIn("GROUPS_AT_A_TIME", page)
+

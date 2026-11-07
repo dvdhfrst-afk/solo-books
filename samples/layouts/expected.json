@@ -1,0 +1,26 @@
+{
+ "about": "Every file in this folder is invented and holds these same rows. Positive is money in.",
+ "rows": [
+  {
+   "date": "2025-03-03",
+   "cents": -1250
+  },
+  {
+   "date": "2025-03-05",
+   "cents": -8999
+  },
+  {
+   "date": "2025-03-07",
+   "cents": -2400
+  },
+  {
+   "date": "2025-03-12",
+   "cents": 1500
+  },
+  {
+   "date": "2025-03-20",
+   "cents": 50000
+  }
+ ],
+ "net_cents": 38851
+}

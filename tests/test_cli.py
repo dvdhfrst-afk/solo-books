@@ -221,7 +221,7 @@ class Workflow(BooksCase):
         path = self.dir / "c.csv"
         self.assertIn("Wrote", self.ok("report", "schedule-c", "--year", "2025", "--format", "csv", "-o", str(path)))
         text_path = self.dir / "c.txt"
-        self.assertEqual(self.ok("report", "schedule-c", "--year", "2025", "-o", str(text_path)), "")
+        self.assertIn("Wrote", self.ok("report", "schedule-c", "--year", "2025", "-o", str(text_path)))
         self.assertTrue(text_path.read_text(encoding="utf-8-sig").startswith("Schedule C rollup"))
 
     def test_preparer_export_warns_about_open_rows(self) -> None:

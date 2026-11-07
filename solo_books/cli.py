@@ -2,32 +2,51 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sqlite3
 import sys
 import webbrowser
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
-from . import __version__, books, db, importer, ledger, reconcile, render, reports, review, rules, schedule_c, web
+from . import __version__, books, db, importer, layouts, ledger, reconcile, render, reports, review, rules, safety, schedule_c, web
 from .csvmap import Mapping, suggest_mapping
 from .errors import BooksError
+from .files import write_atomic
 from .money import format_cents, parse_cents
-from .periods import parse_iso_date, parse_period, year_period
-from .text import merchant_key, slug
+from .periods import FIRST_YEAR, LAST_YEAR, check_year, parse_iso_date, parse_period, year_period
+from .text import merchant_key, printable, slug
+
+DEBUG_ENV_VAR = "SOLO_BOOKS_DEBUG"
+_MAX_ROW_WARNINGS = 10
+
+EXIT_OK = 0
+# A finding rather than a failure: a reconciliation that does not tie, a check that found problems.
+EXIT_FINDING = 1
+EXIT_USER_ERROR = 2
+EXIT_INTERNAL_ERROR = 3
+EXIT_INTERRUPTED = 130
+
+
+def program_name() -> str:
+    """How this program was started, so a hint on screen can be typed back as it stands."""
+    started_as = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else ""
+    return "solo-books" if started_as.startswith("solo-books") else "python -m solo_books"
 
 
 # Setup
 
 def cmd_init(args) -> int:
     path = db.resolve_db_path(args.db)
-    if path.exists():
+    if path.exists() and path.is_file() and path.stat().st_size > 0:
+        db.connect(path).close()
         print(f"Books already exist at {path}. Nothing changed.")
         return 0
-    path.parent.mkdir(parents=True, exist_ok=True)
     db.connect(path, create=True).close()
     print(f"Created empty books at {path}.")
-    print("Next: python -m solo_books business add \"Business A\"")
+    print(f"Next: {program_name()} business add \"Your Business\"")
     return 0
 
 
@@ -41,6 +60,19 @@ def cmd_business_add(args, conn) -> int:
 def cmd_business_list(args, conn) -> int:
     rows = [[b["name"], b["activity"]] for b in books.list_businesses(conn)]
     print(render.table(["Business", "Activity"], rows))
+    return 0
+
+
+def cmd_business_rename(args, conn) -> int:
+    business = books.get_business(conn, args.name)
+    print(f"{business['name']} is now {books.rename_business(conn, business, args.new_name)}.")
+    return 0
+
+
+def cmd_business_delete(args, conn) -> int:
+    business = books.get_business(conn, args.name)
+    books.delete_business(conn, business)
+    print(f"Deleted {business['name']} and its chart of accounts.")
     return 0
 
 
@@ -104,7 +136,9 @@ def cmd_chart_retire(args, conn) -> int:
 # Accounts and mappings
 
 def _mapping_from_args(args, base: Optional[Mapping] = None) -> Optional[Mapping]:
-    """Build a mapping from --mapping FILE and any column flags; flags win over the file."""
+    """Build a mapping from --layout, --mapping FILE and any column flags; flags win over the rest."""
+    if args.layout and args.mapping:
+        raise BooksError("give --layout or --mapping, not both")
     overrides = {
         "date_column": args.date_col,
         "date_format": args.date_format,
@@ -128,9 +162,14 @@ def _mapping_from_args(args, base: Optional[Mapping] = None) -> Optional[Mapping
         overrides["invert_amount"] = False
     if args.no_reference_col:
         overrides["reference_column"] = None
-    if not args.mapping and not overrides:
+    if not args.mapping and not args.layout and not overrides:
         return None
-    mapping = Mapping.from_file(Path(args.mapping)) if args.mapping else (base or Mapping())
+    if args.layout:
+        mapping = layouts.get_layout(args.layout).mapping()
+    elif args.mapping:
+        mapping = Mapping.from_file(Path(args.mapping))
+    else:
+        mapping = base or Mapping()
     if args.debit_col and args.amount_col is None:
         mapping.amount_column = None
     if args.amount_col:
@@ -163,7 +202,7 @@ def cmd_account_add(args, conn) -> int:
     )
     print(f"Added account {account['name']} ({account['kind']}) to {business['name']}.")
     if mapping is None:
-        print("It has no column mapping yet. Try: python -m solo_books mapping suggest EXPORT.csv")
+        print(f"It has no column mapping yet. See 'mapping layouts', or try: {program_name()} mapping suggest EXPORT.csv")
     return 0
 
 
@@ -194,7 +233,21 @@ def cmd_account_list(args, conn) -> int:
             ]
         )
     print(render.table(["Account", "Business", "Kind", "Rows", "Balance", "Mapping"], rows, {3}))
-    print("Card balances show what is owed.")
+    if any(row[2] == "credit_card" for row in rows):
+        print("Card balances show what is owed.")
+    return 0
+
+
+def cmd_account_rename(args, conn) -> int:
+    account = books.get_account(conn, args.name)
+    print(f"{account['name']} is now {books.rename_account(conn, account, args.new_name)}.")
+    return 0
+
+
+def cmd_account_delete(args, conn) -> int:
+    account = books.get_account(conn, args.name)
+    count = books.delete_account(conn, account, with_rows=args.with_rows)
+    print(f"Deleted {account['name']} and its {count} row(s).")
     return 0
 
 
@@ -222,7 +275,7 @@ def cmd_account_map(args, conn) -> int:
     base = Mapping.from_json(account["mapping_json"]) if account["mapping_json"] else None
     mapping = _mapping_from_args(args, base)
     if mapping is None:
-        raise BooksError("nothing to set. Pass --mapping FILE or column flags such as --date-col.")
+        raise BooksError("nothing to set. Pass --layout ID, --mapping FILE or column flags such as --date-col.")
     books.set_account_mapping(conn, account, mapping.to_json())
     print(f"Mapping saved for {account['name']}. Check it with: import \"{account['name']}\" FILE --dry-run")
     return 0
@@ -237,11 +290,25 @@ def cmd_account_opening(args, conn) -> int:
     return 0
 
 
+def cmd_mapping_layouts(args) -> int:
+    rows = [[layout.id, layout.name] for layout in layouts.load_layouts().values()]
+    print(render.table(["Layout", "For"], rows, max_cell=90))
+    print(f"\nUse one with: {program_name()} account map \"Your Account\" --layout ID")
+    print("None of these has been checked against a live export. Always look at a dry run first. See docs/BANK-LAYOUTS.md.")
+    return 0
+
+
 def cmd_mapping_suggest(args) -> int:
-    mapping, notes = suggest_mapping(Path(args.file))
+    found = layouts.detect_layouts(Path(args.file))
+    if found:
+        mapping = found[0].mapping()
+        notes = [f"This looks like layout {found[0].id}: {found[0].name}. Check the signs in a dry run."]
+        notes.extend(f"It also fits layout {other.id}." for other in found[1:] if len(other.signature) == len(found[0].signature))
+    else:
+        mapping, notes = suggest_mapping(Path(args.file))
     text = mapping.to_json()
     if args.output:
-        Path(args.output).write_text(text + "\n", encoding="utf-8")
+        write_atomic(Path(args.output), (text + "\n").encode("utf-8"))
         print(f"Wrote {args.output}")
     else:
         print(text)
@@ -276,12 +343,18 @@ def _print_import(result: importer.ImportResult) -> None:
         print(render.table(["Date", "Amount", "Description"], rows, {1}))
     for warning in result.warnings:
         print(f"WARNING: {warning}")
+    for warning in result.row_warnings[:_MAX_ROW_WARNINGS]:
+        print(f"WARNING: {warning}")
+    if len(result.row_warnings) > _MAX_ROW_WARNINGS:
+        print(f"WARNING: ...and {len(result.row_warnings) - _MAX_ROW_WARNINGS} more like these.")
 
 
 def cmd_import(args, conn) -> int:
     account = books.get_account(conn, args.account)
     result = importer.import_export(conn, account, Path(args.file), dry_run=args.dry_run, skip_bad=args.skip_bad)
     _print_import(result)
+    if not result.dry_run and result.waiting_for_review:
+        print(f"Next: {program_name()} review --groups")
     return 0
 
 
@@ -415,9 +488,15 @@ def cmd_rules_test(args, conn) -> int:
     return 0
 
 
+def _deliver(text: str, output: Optional[str]) -> None:
+    render.deliver(text, output)
+    if output:
+        print(f"Wrote {output}")
+
+
 def cmd_rules_export(args, conn) -> int:
     business = books.get_business(conn, args.business)
-    render.deliver(rules.export_rules(conn, business["id"]), args.output)
+    _deliver(rules.export_rules(conn, business["id"]), args.output)
     return 0
 
 
@@ -504,7 +583,7 @@ def cmd_txn_list(args, conn) -> int:
     )
     if args.format == "csv":
         form = schedule_c.latest_form()
-        render.deliver(render.csv_text(render.DETAIL_CSV_HEADERS, render.detail_csv_rows(rows, form)), args.output)
+        _deliver(render.csv_text(render.DETAIL_CSV_HEADERS, render.detail_csv_rows(rows, form)), args.output)
         return 0
     table_rows = [
         [
@@ -578,6 +657,20 @@ def cmd_txn_add(args, conn) -> int:
     finished = ledger.finished_reconciliation_on(conn, account["id"], parse_iso_date(args.date))
     if finished:
         print(f"WARNING: this date is inside finished reconciliation {finished}, so that period no longer ties.")
+    return 0
+
+
+def cmd_txn_edit(args, conn) -> int:
+    if args.date is None and args.amount is None and args.description is None:
+        raise BooksError("nothing to change. Pass --date, --amount or --description.")
+    ledger.edit_manual(
+        conn,
+        args.id,
+        parse_iso_date(args.date) if args.date else None,
+        parse_cents(args.amount) if args.amount is not None else None,
+        args.description,
+    )
+    print(f"Transaction {args.id} changed.")
     return 0
 
 
@@ -680,9 +773,7 @@ def cmd_report_pnl(args, conn) -> int:
         rows: List[List[str]] = []
         for pnl in reports_list:
             rows.extend(render.pnl_csv_rows(pnl))
-        render.deliver(render.csv_text(render.PNL_CSV_HEADERS, rows), args.output)
-        if args.output:
-            print(f"Wrote {args.output}")
+        _deliver(render.csv_text(render.PNL_CSV_HEADERS, rows), args.output)
         return 0
     chunks = [render.pnl_text(pnl) for pnl in reports_list]
     if len(reports_list) > 1:
@@ -709,7 +800,7 @@ def cmd_report_pnl(args, conn) -> int:
             f"All businesses, {period.label}\n"
             + render.table(["Business", "Income", "Cost of goods", "Expenses", "Net"], rows, {1, 2, 3, 4})
         )
-    render.deliver("\n\n".join(chunks), args.output)
+    _deliver("\n\n".join(chunks), args.output)
     return 0
 
 
@@ -720,11 +811,9 @@ def cmd_report_schedule_c(args, conn) -> int:
         rows: List[List[str]] = []
         for result in results:
             rows.extend(render.schedule_c_csv_rows(result))
-        render.deliver(render.csv_text(render.SCHEDULE_CSV_HEADERS, rows), args.output)
-        if args.output:
-            print(f"Wrote {args.output}")
+        _deliver(render.csv_text(render.SCHEDULE_CSV_HEADERS, rows), args.output)
         return 0
-    render.deliver("\n\n".join(render.schedule_c_text(r, args.all_lines) for r in results), args.output)
+    _deliver("\n\n".join(render.schedule_c_text(r, args.all_lines) for r in results), args.output)
     return 0
 
 
@@ -735,44 +824,66 @@ def cmd_report_balances(args, conn) -> int:
         rows: List[List[str]] = []
         for report in reports_list:
             rows.extend(render.balances_csv_rows(report))
-        render.deliver(render.csv_text(render.BALANCES_CSV_HEADERS, rows), args.output)
-        if args.output:
-            print(f"Wrote {args.output}")
+        _deliver(render.csv_text(render.BALANCES_CSV_HEADERS, rows), args.output)
         return 0
     chunks = [render.balances_text(report) for report in reports_list]
     if len(reports_list) > 1:
         chunks.append(render.balances_summary_text(reports_list))
-    render.deliver("\n\n".join(chunks), args.output)
+    _deliver("\n\n".join(chunks), args.output)
     return 0
+
+
+def _file_stems(businesses: List[sqlite3.Row]) -> Dict[int, str]:
+    """A file name per business. Two names can reduce to one slug, and neither may overwrite the other."""
+    stems: Dict[int, str] = {}
+    taken = set()
+    for business in businesses:
+        stem = slug(business["name"])
+        if stem in taken:
+            stem = f"{stem}-{business['id']}"
+        taken.add(stem)
+        stems[business["id"]] = stem
+    return stems
 
 
 def cmd_report_preparer(args, conn) -> int:
     """One folder a tax preparer can work from: the rollup, the quarters, the balances, and every row behind them."""
     out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if out_dir.exists() and not out_dir.is_dir():
+        raise BooksError(f"{out_dir} is a file. Give a folder for --out.")
     period = year_period(args.year)
-    for business in _businesses(conn, args.business):
-        name = slug(business["name"])
+    businesses = _businesses(conn, args.business)
+    stems = _file_stems(businesses)
+    # Work everything out first, so a report that cannot be made leaves no half-filled folder.
+    files = []
+    summary: List[str] = []
+    for business in businesses:
+        name = stems[business["id"]]
         result = reports.schedule_c(conn, business, args.year, args.lines_year)
         rollup = out_dir / f"{name}-schedule-c-{args.year}.csv"
-        render.deliver(render.csv_text(render.SCHEDULE_CSV_HEADERS, render.schedule_c_csv_rows(result)), str(rollup))
+        files.append((rollup, render.csv_text(render.SCHEDULE_CSV_HEADERS, render.schedule_c_csv_rows(result))))
         pnl = reports.profit_and_loss(conn, business, period, "quarter")
         pnl_path = out_dir / f"{name}-profit-and-loss-{args.year}.csv"
-        render.deliver(render.csv_text(render.PNL_CSV_HEADERS, render.pnl_csv_rows(pnl)), str(pnl_path))
+        files.append((pnl_path, render.csv_text(render.PNL_CSV_HEADERS, render.pnl_csv_rows(pnl))))
         rows = ledger.find_transactions(conn, business_id=business["id"], period=period)
         detail = out_dir / f"{name}-transactions-{args.year}.csv"
-        render.deliver(render.csv_text(render.DETAIL_CSV_HEADERS, render.detail_csv_rows(rows, result.form)), str(detail))
+        files.append((detail, render.csv_text(render.DETAIL_CSV_HEADERS, render.detail_csv_rows(rows, result.form))))
         balances_path = out_dir / f"{name}-balances-{args.year}.csv"
-        render.deliver(
-            render.csv_text(render.BALANCES_CSV_HEADERS, render.balances_csv_rows(reports.balances(conn, business, period))),
-            str(balances_path),
-        )
-        print(f"{business['name']}: line 31 {format_cents(result.net_line.cents)}, {len(rows)} rows")
-        print(f"  {rollup}\n  {pnl_path}\n  {balances_path}\n  {detail}")
+        balances_rows = render.balances_csv_rows(reports.balances(conn, business, period))
+        files.append((balances_path, render.csv_text(render.BALANCES_CSV_HEADERS, balances_rows)))
+        summary.append(f"{business['name']}: line 31 {format_cents(result.net_line.cents)}, {len(rows)} rows")
+        summary.append(f"  {rollup}\n  {pnl_path}\n  {balances_path}\n  {detail}")
         if result.uncategorized_count:
-            print(f"  WARNING: {result.uncategorized_count} uncategorized row(s) are not in the figures. Run 'review' first.")
-        for warning in result.warnings:
-            print(f"  WARNING: {warning}")
+            summary.append(f"  WARNING: {result.uncategorized_count} uncategorized row(s) are not in the figures. Run 'review' first.")
+        summary.extend(f"  WARNING: {warning}" for warning in result.warnings)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise BooksError(f"cannot create the folder {out_dir}: {exc.strerror}") from None
+    for path, text in files:
+        render.deliver(text, str(path))
+    for line in summary:
+        print(line)
     print(reports.NOT_ADVICE)
     return 0
 
@@ -801,6 +912,14 @@ def cmd_inventory_list(args, conn) -> int:
 
 
 def cmd_status(args, conn) -> int:
+    print(f"Books: {db.resolve_db_path(args.db)}")
+    print(f"Last backup: {db.get_meta(conn, 'last_backup_at') or 'never. Make one with the backup command.'}")
+    if not books.list_businesses(conn):
+        print(f"\nNo businesses yet. Next: {program_name()} business add \"Your Business\"")
+        return 0
+    if not books.list_accounts(conn):
+        print(f"\nNo accounts yet. Next: {program_name()} account add --help")
+        return 0
     rows = []
     for business in books.list_businesses(conn):
         waiting = len(review.queue(conn, business["id"]))
@@ -823,9 +942,72 @@ def cmd_status(args, conn) -> int:
 
 
 def cmd_backup(args, conn) -> int:
-    db.backup(conn, Path(args.file))
-    print(f"Backed up to {args.file}.")
+    books_path = db.resolve_db_path(args.db)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    target = Path(args.file) if args.file else books_path.with_name(f"{books_path.stem}-backup-{stamp}{books_path.suffix}")
+    db.backup(conn, target)
+    rows = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+    print(f"Backed up {rows} row(s) to {target}. It passed SQLite's integrity check.")
     return 0
+
+
+def _print_check(report: safety.CheckReport) -> None:
+    print(f"Checked {report.path}")
+    if report.version is not None:
+        print(f"  Schema version {report.version}; this program reads up to {db.schema_version()}.")
+    if report.counts:
+        counts = report.counts
+        print(
+            f"  {counts.get('businesses', 0)} business(es), {counts.get('accounts', 0)} account(s), "
+            f"{counts.get('rows', 0)} row(s), {counts.get('waiting', 0)} waiting for review, "
+            f"{counts.get('rules', 0)} rule(s), {counts.get('finished', 0)} finished reconciliation(s)."
+        )
+    for note in report.notes:
+        print(f"  NOTE: {note}")
+    for problem in report.problems:
+        print(f"  PROBLEM: {problem}")
+
+
+def cmd_check(args) -> int:
+    report = safety.check_books(db.resolve_db_path(args.db))
+    _print_check(report)
+    if report.healthy:
+        print("RESULT: no problems found.")
+        return EXIT_OK
+    print("RESULT: PROBLEMS FOUND. Nothing was changed.")
+    print(f"Next: keep a copy of this file as it is, then follow {db.RECOVERY_DOC}.")
+    print(f"In short: '{program_name()} restore BACKUP' if you have a backup, or '{program_name()} salvage NEW-FILE' if you do not.")
+    return EXIT_FINDING
+
+
+def cmd_restore(args) -> int:
+    books_path = db.resolve_db_path(args.db)
+    kept = safety.restore(books_path, Path(args.file))
+    print(f"Restored {args.file} to {books_path}.")
+    if kept:
+        print(f"The books as they were are kept at {kept}.")
+    print("Anything imported since that backup is gone from the books. Import those files again; rows already there are not doubled.")
+    return EXIT_OK
+
+
+def cmd_salvage(args) -> int:
+    source, destination = db.resolve_db_path(args.db), Path(args.file)
+    outcome = safety.salvage(source, destination)
+    print(f"Copied what could be read from {source} to {destination}. {source} was only read.")
+    for table, count in sorted(outcome.copied.items()):
+        print(f"  {table}: {count} row(s) copied")
+    for table, count in sorted(outcome.unreadable.items()):
+        print(f"  {table}: {count} row(s) could not be read")
+    for table, count in sorted(outcome.refused.items()):
+        print(f"  {table}: {count} row(s) were too damaged to keep")
+    if outcome.detached:
+        print(f"  {outcome.detached} link(s) to something lost were cleared. Rows whose category was lost are back in the review queue.")
+    if outcome.removed:
+        print(f"  {outcome.removed} row(s) were dropped because what they belong to was lost.")
+    report = safety.check_books(destination)
+    _print_check(report)
+    print("Now use the copy with --db, import your bank files again (rows already there are not doubled), and reconcile.")
+    return EXIT_OK if report.healthy else EXIT_FINDING
 
 
 def cmd_web(args) -> int:
@@ -834,7 +1016,7 @@ def cmd_web(args) -> int:
     try:
         server = web.ReviewServer(path, args.port, verbose=args.verbose)
     except OSError as exc:
-        raise BooksError(f"cannot listen on port {args.port}: {exc.strerror}. Try --port.") from None
+        raise BooksError(f"cannot listen on port {args.port}: {exc.strerror}. Another program may have it. Try --port.") from None
     print(f"Review queue at {server.url}  (Ctrl+C stops it)")
     if args.open:
         webbrowser.open(server.url)
@@ -851,6 +1033,7 @@ def cmd_web(args) -> int:
 
 def _add_mapping_flags(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group("column mapping")
+    group.add_argument("--layout", help="a ready-made mapping for a bank's export (see 'mapping layouts')")
     group.add_argument("--mapping", help="JSON file with the whole mapping (see 'mapping suggest')")
     group.add_argument("--date-col")
     group.add_argument("--date-format", help="strptime format, for example %%m/%%d/%%Y")
@@ -869,13 +1052,48 @@ def _add_mapping_flags(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--no-invert-amount", action="store_true")
 
 
+def _year(text: str) -> int:
+    try:
+        return check_year(int(text))
+    except (ValueError, BooksError):
+        raise argparse.ArgumentTypeError(f"not a year from {FIRST_YEAR} to {LAST_YEAR}: {text!r}") from None
+
+
+def _port(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a port number: {text!r}") from None
+    if not 0 <= value <= 65535:
+        raise argparse.ArgumentTypeError(f"not a port number: {text!r}")
+    return value
+
+
+def _positive(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be 1 or more: {text!r}")
+    return value
+
+
+_EPILOG = """Exit status: 0 done; 1 a finding (a reconciliation that does not tie, a check with problems);
+2 a problem with the request or a file, explained on screen; 3 a bug in this program; 130 stopped with Ctrl+C.
+
+This is a bookkeeping tool. Its reports are bookkeeping summaries, not tax or accounting advice."""
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--db", default=argparse.SUPPRESS, help=f"books file (default ${db.DB_ENV_VAR}, else ./{db.DEFAULT_DB_NAME})")
 
     parser = argparse.ArgumentParser(
-        prog="python -m solo_books",
+        prog=program_name(),
         description="Local bookkeeping for one person who owns one or more single-member LLCs.",
+        epilog=_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         parents=[common],
     )
     parser.add_argument("--version", action="version", version=f"solo-books {__version__}")
@@ -892,32 +1110,42 @@ def build_parser() -> argparse.ArgumentParser:
 
     add(commands, "init", cmd_init, "create empty books", needs_conn=False)
     add(commands, "status", cmd_status, "what is waiting, and how far each account is reconciled")
-    p = add(commands, "backup", cmd_backup, "write a consistent copy of the books to a new file")
-    p.add_argument("file")
+    p = add(commands, "backup", cmd_backup, "write a checked copy of the books to a new file")
+    p.add_argument("file", nargs="?", help="default: a dated name beside the books")
+    add(commands, "check", cmd_check, "check the books for damage and broken bookkeeping; exit status 1 if anything is wrong", needs_conn=False)
+    p = add(commands, "restore", cmd_restore, "put a backup in place of the books; the books as they were are kept", needs_conn=False)
+    p.add_argument("file", help="the backup to restore")
+    p = add(commands, "salvage", cmd_salvage, "copy every readable row from damaged books into a new file", needs_conn=False)
+    p.add_argument("file", help="the new file to write")
 
     business = nested("business", "the businesses you keep books for")
     p = add(business, "add", cmd_business_add, "add a business with a starting chart of accounts")
     p.add_argument("name")
     p.add_argument("--activity", help="what the business does")
     add(business, "list", cmd_business_list, "list businesses")
+    p = add(business, "rename", cmd_business_rename, "rename a business")
+    p.add_argument("name")
+    p.add_argument("new_name")
+    p = add(business, "delete", cmd_business_delete, "delete a business that has no accounts")
+    p.add_argument("name")
 
     chart = nested("chart", "a business's chart of accounts")
     p = add(chart, "list", cmd_chart_list, "list categories and their form lines")
     p.add_argument("--business")
-    p.add_argument("--year", type=int, help="show line numbers for this tax year")
+    p.add_argument("--year", type=_year, help="show line numbers for this tax year")
     p = add(chart, "add", cmd_chart_add, "add a category")
     p.add_argument("code")
     p.add_argument("name")
     p.add_argument("--kind", required=True, choices=books.CATEGORY_KINDS)
     p.add_argument("--line", help="form line number or key")
-    p.add_argument("--year", type=int, help="tax year the line number refers to (default: latest)")
+    p.add_argument("--year", type=_year, help="tax year the line number refers to (default: latest)")
     p.add_argument("--business")
     p = add(chart, "map", cmd_chart_map, "point a category at a Schedule C line")
     p.add_argument("category")
     target = p.add_mutually_exclusive_group(required=True)
     target.add_argument("--line", help="form line number or key")
     target.add_argument("--none", action="store_true", help="take the category off the form")
-    p.add_argument("--year", type=int, help="tax year the line number refers to (default: latest)")
+    p.add_argument("--year", type=_year, help="tax year the line number refers to (default: latest)")
     p.add_argument("--business")
     p = add(chart, "rename", cmd_chart_rename, "rename a category")
     p.add_argument("category")
@@ -947,13 +1175,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("name")
     p.add_argument("--balance", required=True, help="on a card, what was owed")
     p.add_argument("--date", required=True, help="YYYY-MM-DD; the balance at the start of this day")
+    p = add(account, "rename", cmd_account_rename, "rename an account")
+    p.add_argument("name")
+    p.add_argument("new_name")
+    p = add(account, "delete", cmd_account_delete, "delete an account")
+    p.add_argument("name")
+    p.add_argument("--with-rows", action="store_true", help="also delete its rows, which cannot be undone")
 
     mapping = nested("mapping", "column mappings for exports")
-    p = add(mapping, "suggest", cmd_mapping_suggest, "guess a mapping from a sample export", needs_conn=False)
+    add(mapping, "layouts", cmd_mapping_layouts, "list the ready-made mappings for common banks and card issuers", needs_conn=False)
+    p = add(mapping, "suggest", cmd_mapping_suggest, "recognize a bank's layout or guess a mapping from a sample export", needs_conn=False)
     p.add_argument("file")
     p.add_argument("-o", "--output", help="write the JSON to a file")
 
-    p = add(commands, "import", cmd_import, "import a bank or card CSV; safe to repeat with overlapping files")
+    p = add(commands, "import", cmd_import, "import a bank or card CSV, OFX, QFX or QBO file; safe to repeat with overlapping files")
     p.add_argument("account")
     p.add_argument("file")
     p.add_argument("--dry-run", action="store_true", help="report what would happen and save nothing")
@@ -1017,7 +1252,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--category")
     p.add_argument("--uncategorized", action="store_true")
     p.add_argument("--search")
-    p.add_argument("--limit", type=int)
+    p.add_argument("--limit", type=_positive)
     p.add_argument("--format", choices=("table", "csv"), default="table")
     p.add_argument("-o", "--output")
     p = add(txn, "show", cmd_txn_show, "everything about one row: how it was booked, where it came from, its note")
@@ -1029,6 +1264,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--description", required=True)
     p.add_argument("--category")
     p.add_argument("--note")
+    p = add(txn, "edit", cmd_txn_edit, "correct a row you added by hand; rows from a bank file stay as written")
+    p.add_argument("id", type=int)
+    p.add_argument("--date")
+    p.add_argument("--amount", help="signed: negative is money out")
+    p.add_argument("--description")
     p = add(txn, "delete", cmd_txn_delete, "delete rows; later imports will not bring them back")
     p.add_argument("ids", nargs="+", type=int)
     p = add(txn, "note", cmd_txn_note, "attach a note to a row")
@@ -1070,21 +1310,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--format", choices=("table", "csv"), default="table")
     p.add_argument("-o", "--output")
     p = add(report, "schedule-c", cmd_report_schedule_c, "roll one tax year up to Schedule C lines")
-    p.add_argument("--year", type=int, required=True)
-    p.add_argument("--lines-year", type=int, help="use another year's form lines, for a year with no data file")
+    p.add_argument("--year", type=_year, required=True)
+    p.add_argument("--lines-year", type=_year, help="use another year's form lines, for a year with no data file")
     p.add_argument("--business", help="default: every business")
     p.add_argument("--all-lines", action="store_true", help="show lines with nothing on them too")
     p.add_argument("--format", choices=("table", "csv"), default="table")
     p.add_argument("-o", "--output")
     p = add(report, "preparer", cmd_report_preparer, "write a folder of CSV files for a tax preparer")
-    p.add_argument("--year", type=int, required=True)
+    p.add_argument("--year", type=_year, required=True)
     p.add_argument("--out", required=True, help="folder to write into")
-    p.add_argument("--lines-year", type=int)
+    p.add_argument("--lines-year", type=_year, help="use another year's form lines, for a year with no data file")
     p.add_argument("--business", help="default: every business")
 
     inventory = nested("inventory", "beginning and ending inventory for cost of goods sold")
     p = add(inventory, "set", cmd_inventory_set, "save a year's two counts")
-    p.add_argument("--year", type=int, required=True)
+    p.add_argument("--year", type=_year, required=True)
     p.add_argument("--beginning", required=True)
     p.add_argument("--ending", required=True)
     p.add_argument("--business")
@@ -1092,9 +1332,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--business")
 
     p = add(commands, "web", cmd_web, "open the review queue as a local web page", needs_conn=False)
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--port", type=_port, default=8765, help="port on 127.0.0.1 (default 8765)")
     p.add_argument("--open", action="store_true", help="open it in your browser")
-    p.add_argument("--verbose", action="store_true")
+    p.add_argument("--verbose", action="store_true", help="log each request")
     return parser
 
 
@@ -1112,27 +1352,91 @@ def _attach_negative_amounts(argv: List[str]) -> List[str]:
     return result
 
 
+class _PrintableOnly:
+    """Everything shown goes through here, so a hostile row in old books cannot steer the terminal."""
+
+    def __init__(self, stream) -> None:
+        self._stream = stream
+
+    def write(self, text: str) -> int:
+        return self._stream.write(printable(text))
+
+    def __getattr__(self, name: str):
+        return getattr(self._stream, name)
+
+
+def _run(args) -> int:
+    if not args.needs_conn:
+        return args.handler(args)
+    conn = db.connect(db.resolve_db_path(args.db))
+    try:
+        return args.handler(args, conn)
+    finally:
+        conn.close()
+
+
+def _guarded(args) -> int:
+    """Turn everything a person can run into into a plain sentence and an exit status."""
+    try:
+        return _run(args)
+    except BooksError as exc:
+        print(f"solo-books: {exc}", file=sys.stderr)
+        return EXIT_USER_ERROR
+    except BrokenPipeError:
+        return EXIT_OK
+    except KeyboardInterrupt:
+        print("\nsolo-books: stopped. Finished steps are saved, and a step in progress was rolled back.", file=sys.stderr)
+        return EXIT_INTERRUPTED
+    except sqlite3.Error as exc:
+        print(f"solo-books: {db.friendly_error(db.resolve_db_path(args.db), exc)}", file=sys.stderr)
+        return EXIT_USER_ERROR
+    except OverflowError:
+        print("solo-books: a number on the command line or in the file is too large.", file=sys.stderr)
+        return EXIT_USER_ERROR
+    except OSError as exc:
+        where = f"{exc.filename}: " if exc.filename else ""
+        print(f"solo-books: {where}{exc.strerror or exc}", file=sys.stderr)
+        return EXIT_USER_ERROR
+    except MemoryError:
+        print("solo-books: this computer ran out of memory. Nothing unfinished was saved.", file=sys.stderr)
+        return EXIT_USER_ERROR
+    except Exception as exc:  # The last line of defense: a person gets a sentence, not a stack trace.
+        if os.environ.get(DEBUG_ENV_VAR):
+            raise
+        print(
+            f"solo-books: this is a bug in the program ({type(exc).__name__}: {exc}). The step in progress was rolled back. "
+            f"Set {DEBUG_ENV_VAR}=1 and run it again to see the details.",
+            file=sys.stderr,
+        )
+        return EXIT_INTERNAL_ERROR
+
+
+def _flush_quietly() -> None:
+    """A reader such as 'head' may be gone already. That is not an error worth a message at exit."""
+    try:
+        sys.stdout.flush()
+    except BrokenPipeError:
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except (OSError, ValueError):
+            pass
+    except (OSError, ValueError):
+        pass
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
-    parser = build_parser()
-    args = parser.parse_args(_attach_negative_amounts(sys.argv[1:] if argv is None else list(argv)))
-    if not hasattr(args, "db"):
-        args.db = None
+    real_out, real_err = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = _PrintableOnly(real_out), _PrintableOnly(real_err)
     try:
-        if not args.needs_conn:
-            return args.handler(args)
-        conn = db.connect(db.resolve_db_path(args.db))
-        try:
-            return args.handler(args, conn)
-        finally:
-            conn.close()
-    except BooksError as exc:
-        print(f"solo-books: {exc}", file=sys.stderr)
-        return 2
-    except BrokenPipeError:
-        return 0
-    except sqlite3.OperationalError as exc:
-        print(f"solo-books: the books file could not be used: {exc}", file=sys.stderr)
-        return 2
+        parser = build_parser()
+        args = parser.parse_args(_attach_negative_amounts(sys.argv[1:] if argv is None else list(argv)))
+        if not hasattr(args, "db"):
+            args.db = None
+        code = _guarded(args)
+        _flush_quietly()
+        return code
+    finally:
+        sys.stdout, sys.stderr = real_out, real_err

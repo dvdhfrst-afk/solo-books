@@ -212,7 +212,7 @@ class Locking(ReconcileBase):
         recon_id = self._finish_january()
         path = self.write("a.csv", "Date,Description,Amount\n01/20/2025,LATE ROW,-1.00\n")
         result = importer.import_export(self.conn, self.acct, path)
-        self.assertTrue(any("inside" in w and str(recon_id) in w for w in result.warnings))
+        self.assertTrue(any("inside" in w and str(recon_id) in w for w in result.row_warnings))
         report = reconcile.compute(self.conn, reconcile.get(self.conn, recon_id))
         self.assertEqual(report.difference, 100)
         self.assertEqual([row["description"] for row in report.rows_added_after_finish], ["LATE ROW"])

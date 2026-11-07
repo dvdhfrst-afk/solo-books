@@ -7,13 +7,15 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
-from .csvmap import Mapping, ParsedRow, parse_export
+from .csvmap import Mapping, ParsedFile, ParsedRow, decode, parse_text, read_bytes
 from .db import transaction
 from .errors import BooksError
+from .layouts import describe_match
 from .ledger import finished_reconciliation_on, natural_key, plain_key, reference_key
 from .money import format_cents
+from .ofx import OFX_MAPPING_JSON, looks_like_ofx, parse_ofx
 from .rules import first_match, load_rules
 from .text import merchant_key
 
@@ -21,6 +23,8 @@ _NEAR_DUPLICATE_DAYS = 3
 # A bank can move a pending row's date by a few days and still call it the same row.
 _SAME_ID_DAYS = 7
 _MAX_ERRORS_SHOWN = 20
+# A date this far ahead is a misread format, not a row posted early.
+_FUTURE_DAYS = 7
 
 
 @dataclass
@@ -41,6 +45,8 @@ class ImportResult:
     latest: Optional[date] = None
     samples: List[ParsedRow] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    # One line for one row. There can be thousands, so these are shown after the warnings, and cut short.
+    row_warnings: List[str] = field(default_factory=list)
     bad_rows: List[str] = field(default_factory=list)
     conflicts: List[str] = field(default_factory=list)
 
@@ -49,13 +55,29 @@ class _DryRun(Exception):
     """Unwinds the transaction after a dry run has worked everything out."""
 
 
-def account_mapping(account: sqlite3.Row) -> Mapping:
+def account_mapping(account: sqlite3.Row, path: Optional[Path] = None) -> Mapping:
     if not account["mapping_json"]:
-        raise BooksError(
-            f"account {account['name']!r} has no column mapping yet. "
-            "Set one with 'account map', or get a starting point from 'mapping suggest FILE'."
+        layout = describe_match(path) if path else None
+        hint = (
+            f"This file looks like layout {layout}: 'account map \"{account['name']}\" --layout {layout}'."
+            if layout
+            else "Set one with 'account map', or get a starting point from 'mapping suggest FILE'."
         )
+        raise BooksError(f"account {account['name']!r} has no column mapping yet. {hint}")
     return Mapping.from_json(account["mapping_json"])
+
+
+def read_export(account: sqlite3.Row, path: Path, mapping: Optional[Mapping] = None) -> "Tuple[ParsedFile, str, str]":
+    """Read a CSV through the account's mapping, or an OFX file, which needs none. Also gives its hash and how it was read."""
+    data = read_bytes(path)
+    sha = hashlib.sha256(data).hexdigest()
+    if mapping is None and account["mapping_json"]:
+        mapping = Mapping.from_json(account["mapping_json"])
+    text = decode(data, path.name, mapping.encoding if mapping else None)
+    if looks_like_ofx(text):
+        return parse_ofx(text, path.name), sha, OFX_MAPPING_JSON
+    mapping = mapping or account_mapping(account, path)
+    return parse_text(text, mapping, path.name), sha, mapping.to_json()
 
 
 def import_export(
@@ -68,8 +90,7 @@ def import_export(
 ) -> ImportResult:
     """Import one file. Every row goes in, or none do, unless skip_bad is asked for."""
     path = Path(path)
-    mapping = mapping or account_mapping(account)
-    parsed = parse_export(path, mapping)
+    parsed, sha, how_read = read_export(account, path, mapping)
     if parsed.errors and not skip_bad and not dry_run:
         shown = "\n  ".join(parsed.errors[:_MAX_ERRORS_SHOWN])
         more = len(parsed.errors) - _MAX_ERRORS_SHOWN
@@ -89,7 +110,6 @@ def import_export(
         days = [row.posted_on for row in parsed.rows]
         result.earliest, result.latest = min(days), max(days)
 
-    sha = hashlib.sha256(path.read_bytes()).hexdigest()
     earlier = conn.execute(
         "SELECT id, imported_at, mapping_json FROM imports WHERE account_id = ? AND file_sha256 = ? AND undone_at IS NULL"
         " ORDER BY id DESC",
@@ -100,16 +120,38 @@ def import_export(
 
     try:
         with transaction(conn):
-            _insert_rows(conn, account, path.name, sha, mapping.to_json(), parsed.rows, result)
+            _insert_rows(conn, account, path.name, sha, how_read, parsed.rows, result)
             _settle_conflicts(path.name, result, stop=not (dry_run or skip_bad))
-            _check_remapped_file(earlier, mapping.to_json(), result, stop=not dry_run)
+            _check_remapped_file(earlier, how_read, result, stop=not dry_run)
             if dry_run:
                 raise _DryRun
     except _DryRun:
         result.import_id = None
 
     _sign_warning(account, parsed.rows, result)
+    _date_warnings(conn, account, parsed.rows, result)
+    if parsed.data_rows == 0:
+        result.warnings.append(f"{path.name} has a header but no rows. Check that the download covers the dates you chose.")
     return result
+
+
+def _date_warnings(conn: sqlite3.Connection, account: sqlite3.Row, rows: List[ParsedRow], result: ImportResult) -> None:
+    """Two ways a row can go in and then quietly fail to count the way someone expects."""
+    latest_allowed = date.today() + timedelta(days=_FUTURE_DAYS)
+    ahead = [row for row in rows if row.posted_on > latest_allowed]
+    if ahead:
+        result.warnings.append(
+            f"{len(ahead)} row(s) are dated after today, up to {max(row.posted_on for row in ahead)}. "
+            "If the months and days look swapped, fix date_format and undo this import."
+        )
+    if account["opening_date"]:
+        early = [row for row in rows if row.posted_on.isoformat() < account["opening_date"]]
+        if early:
+            result.warnings.append(
+                f"{len(early)} row(s) are dated before this account's opening date of {account['opening_date']}. "
+                "They still count in profit and loss, but not in the account's balance. "
+                "Move the opening date earlier with 'account opening' if they belong."
+            )
 
 
 class _Verdict(NamedTuple):
@@ -329,9 +371,16 @@ def _settle_conflicts(file_name: str, result: ImportResult, stop: bool) -> None:
     result.rows_bad += len(result.conflicts)
 
 
+def _same_reading(left: str, right: str) -> bool:
+    """Two records of how a file was read mean the same thing even if a newer version wrote more fields."""
+    if left == right or OFX_MAPPING_JSON in (left, right):
+        return left == right
+    return Mapping.from_json(left).to_json() == Mapping.from_json(right).to_json()
+
+
 def _check_remapped_file(earlier: Optional[sqlite3.Row], mapping_json: str, result: ImportResult, stop: bool) -> None:
     """The same file read a new way would stack new rows on the old ones, such as both signs of each amount."""
-    if earlier is None or not result.rows_new or earlier["mapping_json"] == mapping_json:
+    if earlier is None or not result.rows_new or _same_reading(earlier["mapping_json"], mapping_json):
         return
     message = (
         f"This exact file is already in the books as import {earlier['id']}, read with a different mapping, "
@@ -356,7 +405,7 @@ def _warn_near_duplicate(
         (account["id"], row.amount_cents, low, high, key, result.import_id, merchant_key(row.description)),
     ).fetchone()
     if match:
-        result.warnings.append(
+        result.row_warnings.append(
             f"Possible duplicate: {row.posted_on} {format_cents(row.amount_cents)} {row.description!r} is new, but "
             f"transaction {match['id']} ({match['posted_on']}, {match['description']!r}) looks the same."
         )
@@ -365,7 +414,7 @@ def _warn_near_duplicate(
 def _warn_inside_finished(conn: sqlite3.Connection, account: sqlite3.Row, row: ParsedRow, result: ImportResult) -> None:
     hit = finished_reconciliation_on(conn, account["id"], row.posted_on)
     if hit:
-        result.warnings.append(
+        result.row_warnings.append(
             f"New row {row.posted_on} {format_cents(row.amount_cents)} {row.description!r} falls inside "
             f"finished reconciliation {hit}, so that period no longer ties. Check it with 'reconcile show {hit}'."
         )

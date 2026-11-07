@@ -7,16 +7,21 @@ statement to the cent, and hand your tax preparer a clean set of files.
 It runs on your own computer: one Python program with no dependencies and one SQLite file. Nothing is sent
 anywhere. Amounts are stored as whole cents, so totals never drift.
 
-This is a bookkeeping tool. Its reports are bookkeeping summaries, not tax advice.
+**This is not tax or accounting advice.** It is a bookkeeping tool. It adds up what you tell it to, and its reports are
+summaries for you and your tax preparer. It does not know your situation, it does not decide what is deductible, and
+nobody has audited its output. Check what it gives you, and ask a professional about anything that matters.
 
-- Import CSV (comma-separated values) exports, with a column mapping per account. Overlapping exports do not
-  duplicate rows.
+- Import CSV (comma-separated values), OFX, QFX and QBO files. Ready-made layouts cover 22 common bank and card exports,
+  and any other CSV gets its own column mapping. Overlapping exports do not duplicate rows.
 - Rules book what they can. A review queue, in the terminal or on a local web page, holds the rest.
 - A "Transfer" category keeps card payments and moves between accounts out of income and expenses.
 - Separate books and a separate chart of accounts per business.
 - Reconcile an account for a statement period and see exactly what does not match.
 - Profit and loss by period and business, balances that show what moved the money, a Schedule C rollup per business
   per tax year, and CSV files for your preparer.
+- Backups, a damage check, restore, and salvage for damaged files. See [Keeping your books safe](#keeping-your-books-safe).
+
+Read [What it does not do](#what-it-does-not-do) and [docs/TESTING.md](docs/TESTING.md) before you rely on it.
 
 ## Run it
 
@@ -26,12 +31,26 @@ You need Python 3.9 or newer. There is nothing to install. Run every command fro
 python -m solo_books --help
 ```
 
-Books live in `books.sqlite3` in the current folder. Use `--db FILE` or set the `SOLO_BOOKS_DB` environment
-variable to keep them elsewhere. Your books are ignored by git here, and you can copy them safely at any time:
+On some systems the command is `python3` or, on Windows, `py`. Use whichever one prints a version of 3.9 or newer
+for `--version`. The examples here say `python`.
+
+Or install it, which gives you a `solo-books` command that works from any folder. It needs no packages at run time, but
+`pip` needs a network connection to fetch its build tool. In a virtual environment:
 
 ```bash
-python -m solo_books backup books-2025-12-31.sqlite3
+python -m venv .venv
 ```
+
+```bash
+.venv/bin/pip install .
+```
+
+On Windows the second command is `.venv\Scripts\pip install .`, and the program is then `.venv\Scripts\solo-books`.
+Everywhere below, `solo-books` can stand in for `python -m solo_books`. The sample commands still need this folder,
+because they name files in `samples/`.
+
+Books live in `books.sqlite3` in the current folder. Use `--db FILE` or set the `SOLO_BOOKS_DB` environment
+variable to keep them elsewhere. Git ignores books in this folder.
 
 ## Try it on the sample year
 
@@ -144,7 +163,8 @@ Or do the same on a web page, which shows the whole queue grouped by merchant, s
 python -m solo_books web --open
 ```
 
-It listens on 127.0.0.1 only, and Ctrl+C stops it. It has an Undo for the last action.
+It listens on 127.0.0.1 only, and Ctrl+C stops it. It has an Undo for the last action. Without `--open` it prints an
+address to open yourself. That address holds a key made new for each run, so use the whole thing.
 
 ### Reconcile
 
@@ -222,20 +242,61 @@ row behind them, for each business.
 python -m solo_books report preparer --year 2025 --out preparer-2025
 ```
 
+Check the result, and make a backup:
+
+```bash
+python -m solo_books check
+```
+
+```bash
+python -m solo_books backup sample-backup.sqlite3
+```
+
 To start over, delete `books.sqlite3`.
 
 ## Using it on your own books
 
+The commands in this section carry on from the sample books, so you can try each one. For your real books, start a
+separate file: work in a new folder, or set `SOLO_BOOKS_DB`, then run `init` and `business add` as above. `my-export.csv`
+below stands for your own file, and an id like `12` for a row number that `txn list` shows you.
+
+### Your first real account
+
+Download an export from your bank. If it offers OFX, QFX or QBO (often labeled Quicken or QuickBooks), take that, since
+it needs no mapping. Otherwise take CSV.
+
+Add an account. The opening balance is the balance at the start of the opening date, from the statement before your
+first row. Without one, the balances report leaves the account out and says so. See which layouts exist first:
+
+```bash
+python -m solo_books mapping layouts
+```
+
+```bash
+python -m solo_books account add "My Checking" --business "Business A" --kind checking --layout us-bank --opening-balance 2500.00 --opening-date 2025-01-01
+```
+
+Look before you leap. A dry run saves nothing and shows how the first rows read. Money in is positive and money out is
+negative, on bank accounts and on cards alike.
+
+```bash
+python -m solo_books import "My Checking" samples/layouts/example-us-bank.csv --dry-run
+```
+
+**The layouts have not been checked against live exports**, only against invented files written to the same
+description. Banks change their files too. [docs/BANK-LAYOUTS.md](docs/BANK-LAYOUTS.md) lists what to check in the dry
+run. The real proof comes at the first `reconcile run`: when it ties to the cent, the file was read correctly.
+
 ### Column mappings
 
-Start from a real export. This guesses a mapping and says what to double-check:
+If no layout fits, start from a real export. This recognizes a known layout if it can, otherwise guesses a mapping, and
+says what to double-check:
 
 ```bash
 python -m solo_books mapping suggest my-export.csv -o my-bank.json
 ```
 
-Attach the mapping to the account, then look before you leap. A dry run saves nothing and shows how the first rows
-read. Money in is positive and money out is negative, on bank accounts and on cards alike.
+Attach the mapping to the account, then do a dry run.
 
 ```bash
 python -m solo_books account map "A Checking" --mapping my-bank.json
@@ -258,8 +319,10 @@ The mapping is a small JSON file. Only the columns your export has need to be na
 | `memo_column` | Extra text. Rules read it too. |
 | `reference_column` | The bank's own unique id for a row, if it has one. Makes re-importing exact. |
 | `status_column`, `skip_statuses` | Skip rows with these statuses. The default is `["pending"]`. |
-| `skip_lines` | Lines of bank chatter above the header row. |
-| `delimiter`, `encoding` | Rarely needed. The default is a comma, and UTF-8 falling back to Windows-1252. |
+| `direction_column`, `debit_values`, `credit_values` | A column saying which way the money went, for exports whose amounts have no sign. The defaults recognize `Debit`, `DR`, `Credit`, `CR` and similar. |
+| `skip_lines` | Lines of bank chatter above the header row. The header is also searched for further down, so this is rarely needed. |
+| `column_names` | Names for the columns of a file with no header row. |
+| `delimiter`, `encoding` | Rarely needed. The default is a comma. Files are read as UTF-8 or UTF-16 when marked or recognizable, otherwise as Windows-1252. |
 
 You can set any of these with flags instead, such as `--date-col "Post Date"` or `--invert-amount`. See
 `account map --help`.
@@ -281,6 +344,9 @@ That usually means the column is a row number rather than a real id, and `accoun
 
 Importing a file again after changing its mapping stops too, because it would put new rows on top of the old ones. Run
 `imports undo ID` first.
+
+Dates in the future, dates before the account's opening date, and a sign that looks backward all get warnings. A file
+that is really an Excel workbook, a PDF or a web page is refused by name.
 
 `imports undo ID` takes back the rows only that file put in. A row another imported file also held stays, along with
 its category, and the output says how many stayed. `txn delete ID` removes one row and remembers it, so an overlapping
@@ -368,6 +434,46 @@ python -m solo_books reconcile list
 python -m solo_books status
 ```
 
+### Fixing mistakes
+
+Names can change at any time. Rows added by hand can be corrected with `txn edit`. Rows from a bank file stay as the bank
+wrote them, with `txn note` to add your own words and `categorize` to book them.
+
+```bash
+python -m solo_books business rename "Business B" "Business Z"
+```
+
+```bash
+python -m solo_books account rename "B Checking" "Z Checking"
+```
+
+A correction looks like `txn edit ID --amount -15.50 --description "CITY PARKING"`, on a row you added with `txn add`.
+
+`account delete NAME` removes an account with no rows. If it has rows, `--with-rows` takes them with it, unless it has a
+finished reconciliation. `business delete NAME` removes a business that has no accounts left, with its chart and rules.
+
+## Keeping your books safe
+
+```bash
+python -m solo_books backup
+```
+
+That writes a checked copy named with today's date beside the books, and never overwrites anything. Or name the file
+yourself, such as `backup books-2025-12-31.sqlite3`. `status` shows when the last backup was made.
+
+```bash
+python -m solo_books check
+```
+
+That looks for damage to the file and for broken bookkeeping, changes nothing, and exits with status 1 if it finds
+anything. If it does, follow [docs/RECOVERY.md](docs/RECOVERY.md). In short: `restore FILE` puts a backup in place and
+keeps what was there, and `salvage NEW-FILE` copies every readable row out of a damaged file.
+
+Do not keep live books in a cloud sync folder. Sync programs can write over a file that is open. Backups are fine there.
+
+Newer versions upgrade the file on first use and keep a copy of the old one beside it. A failed upgrade leaves the file
+as it was.
+
 ## What the reports mean
 
 Books are cash basis on a calendar year: a row counts on the date in the export. A refund reduces the category it is
@@ -399,14 +505,39 @@ At the bottom it shows how line 31 ties back to profit and loss.
 each `key` the same when a line means the same thing even if its number moves. Until that file exists, reports for that
 year stop and say so; `--lines-year` uses an earlier form's lines and labels the output accordingly.
 
+## What it does not do
+
+- US dollars only, and one person at a time. It has no sign-in and no sharing.
+- No bank connections. You download files, and it reads them.
+- Cash basis on a calendar year, single-entry style. It keeps no invoices, payables or payroll.
+- It fills in no forms, computes no tax and files nothing.
+- It reads no PDF statements, Excel workbooks or QIF files.
+- The file is not encrypted. See [SECURITY.md](SECURITY.md).
+- The tax form data covers the years in `solo_books/data/`. Later years need the steps above.
+
+## Exit status
+
+| Status | Meaning |
+|---|---|
+| 0 | Done. |
+| 1 | A finding: a reconciliation that does not tie, a check with problems, a rule test with no match. |
+| 2 | A problem with the request or a file, explained on screen. Nothing was changed. |
+| 3 | A bug in this program. Setting `SOLO_BOOKS_DEBUG=1` shows the full error. |
+| 130 | Stopped with Ctrl+C. Anything already saved stays saved. |
+
+To save a report to a file, prefer `-o FILE` to a shell redirect. It writes UTF-8 and arrives whole, and a Windows
+console redirect may not handle non-English names.
+
 ## How the code is laid out
 
 | Module | Job |
 |---|---|
 | `cli.py` | Commands and arguments. No bookkeeping logic. |
 | `db.py` | The SQLite file, its schema and versioned migrations. |
+| `safety.py`, `files.py` | Check, restore, salvage, and atomic writes. |
 | `books.py` | Businesses, accounts, the chart of accounts, inventory counts. |
-| `csvmap.py` | Reading an export through a mapping. |
+| `csvmap.py`, `ofx.py` | Reading an export through a mapping, and reading OFX files. |
+| `layouts.py`, `data/layouts.json` | Ready-made mappings, and recognizing them from a file. |
 | `importer.py` | Importing, re-import safety, undo. |
 | `rules.py`, `review.py` | Categorization and the queue. |
 | `ledger.py` | Finding, adding, deleting and booking rows. |
@@ -430,6 +561,14 @@ python -m unittest discover
 Two sets of tests check the totals against figures that did not come from this program:
 `tests/fixtures/worked/WORKED.md` is a small example added up by hand, and `samples/expected-2025.json` comes from the
 script that invented the sample year and knows each row's true category.
+
+[docs/TESTING.md](docs/TESTING.md) says what has been tested and what has not, with the numbers from real runs.
+
+## More
+
+- [docs/BANK-LAYOUTS.md](docs/BANK-LAYOUTS.md): the layouts, and what to check in a dry run.
+- [docs/RECOVERY.md](docs/RECOVERY.md): damage, restore, salvage, and what each message means.
+- [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

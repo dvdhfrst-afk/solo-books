@@ -10,13 +10,17 @@ from pathlib import Path
 from typing import Container, Dict, Iterable, List, Optional, Pattern
 
 from .books import find_category, get_account, require_usable
+from .csvmap import read_rows, read_text
 from .db import transaction
 from .errors import BooksError
 from .money import parse_cents, plain_cents
-from .text import normalize_description
+from .text import clean_cell, from_spreadsheet_safe, normalize_description, spreadsheet_safe
 
 MATCH_TYPES = ("contains", "starts", "exact", "regex")
 RULE_CSV_COLUMNS = ("priority", "match", "pattern", "category", "direction", "min", "max", "account")
+MAX_PATTERN = 300
+# A repeat inside a repeat, such as (a+)+, can take years to fail on an ordinary line of text.
+_NESTED_REPEAT = re.compile(r"\((?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)\s*(?:[+*]|\{\d*,?\d*\})")
 
 
 @dataclass
@@ -56,8 +60,26 @@ class Rule:
         return wanted in text or wanted in merchant or (bool(memo) and wanted in normalize_description(memo))
 
 
+def check_regex(pattern: str) -> None:
+    """Refuse a pattern that does not compile, or whose shape can hang a whole import."""
+    if _NESTED_REPEAT.search(pattern):
+        raise BooksError(
+            f"regular expression {pattern!r} has a repeat inside a repeat, which can run for years on one line of "
+            "text. Rewrite it without the outer repeat."
+        )
+    try:
+        re.compile(pattern)
+    except re.error as exc:
+        raise BooksError(f"bad regular expression {pattern!r}: {exc}") from None
+
+
 def _compile(row: sqlite3.Row) -> Rule:
-    regex = re.compile(row["pattern"], re.IGNORECASE) if row["match_type"] == "regex" else None
+    regex = None
+    if row["match_type"] == "regex":
+        try:
+            regex = re.compile(row["pattern"], re.IGNORECASE)
+        except re.error as exc:
+            raise BooksError(f"rule {row['id']} no longer compiles ({exc}). Delete it with 'rules delete {row['id']}'.") from None
     return Rule(
         row["id"],
         row["account_id"],
@@ -105,13 +127,13 @@ def add_rule(
 ) -> int:
     if match_type not in MATCH_TYPES:
         raise BooksError(f"match type must be one of: {', '.join(MATCH_TYPES)}")
-    if not pattern.strip():
+    pattern = clean_cell(pattern)
+    if not pattern:
         raise BooksError("a rule needs a pattern")
+    if len(pattern) > MAX_PATTERN:
+        raise BooksError(f"a rule's pattern can be at most {MAX_PATTERN} characters")
     if match_type == "regex":
-        try:
-            re.compile(pattern)
-        except re.error as exc:
-            raise BooksError(f"bad regular expression {pattern!r}: {exc}") from None
+        check_regex(pattern)
     if direction not in (None, "in", "out"):
         raise BooksError("direction must be in or out")
     if min_cents is not None and max_cents is not None and min_cents > max_cents:
@@ -217,7 +239,7 @@ def export_rules(conn: sqlite3.Connection, business_id: int) -> str:
             [
                 row["priority"],
                 row["match_type"],
-                row["pattern"],
+                spreadsheet_safe(row["pattern"]),
                 row["category_code"],
                 row["direction"] or "",
                 plain_cents(row["min_cents"]) if row["min_cents"] is not None else "",
@@ -230,10 +252,11 @@ def export_rules(conn: sqlite3.Connection, business_id: int) -> str:
 
 def import_rules(conn: sqlite3.Connection, business_id: int, path: Path) -> int:
     """Add rules from a CSV with the same columns 'rules export' writes. All or nothing."""
-    try:
-        text = Path(path).read_text(encoding="utf-8-sig")
-    except OSError as exc:
-        raise BooksError(f"cannot read {path}: {exc.strerror}") from None
+    name = Path(path).name
+    text = read_text(path, None)
+    # Going through the whole file first means a malformed one stops before anything is added.
+    if not read_rows(text, ",", name):
+        raise BooksError(f"{name} is empty")
     reader = csv.DictReader(io.StringIO(text, newline=""))
     missing = {"match", "pattern", "category"} - set(reader.fieldnames or [])
     if missing:
@@ -253,7 +276,7 @@ def import_rules(conn: sqlite3.Connection, business_id: int, path: Path) -> int:
                     conn,
                     business_id,
                     (row["match"] or "").strip(),
-                    row["pattern"] or "",
+                    from_spreadsheet_safe(row["pattern"] or ""),
                     category,
                     priority=int(row.get("priority") or 100),
                     account_id=account_id,

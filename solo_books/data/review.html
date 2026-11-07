@@ -102,6 +102,7 @@ label.rule { display: inline-flex; gap: 6px; align-items: center; font-size: 14p
 "use strict";
 const RUN_TOKEN = "__TOKEN__";
 const ROWS_SHOWN = 5;
+const GROUPS_AT_A_TIME = 100;
 let state = null;
 let lastAction = null;
 
@@ -241,12 +242,27 @@ function render() {
     return;
   }
   const byId = new Map(state.businesses.map((b) => [b.id, b]));
-  groups.forEach((group) => queue.append(renderGroup(group, byId.get(group.business_id))));
+  // The largest groups come first, and a long queue is drawn a page at a time so the browser stays quick.
+  let drawn = 0;
+  const more = el("button", { type: "button" });
+  const drawMore = () => {
+    more.remove();
+    groups.slice(drawn, drawn + GROUPS_AT_A_TIME).forEach((group) => queue.append(renderGroup(group, byId.get(group.business_id))));
+    drawn += GROUPS_AT_A_TIME;
+    if (drawn < groups.length) {
+      more.textContent = "Show the next merchants (" + (groups.length - drawn) + " more)";
+      queue.append(more);
+    }
+  };
+  more.addEventListener("click", drawMore);
+  drawMore();
 }
 
 async function load() {
-  const response = await fetch("/api/queue");
-  state = await response.json();
+  const response = await fetch("/api/queue", { headers: { "X-Solo-Books-Token": RUN_TOKEN } });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "the queue could not be read");
+  state = data;
   render();
 }
 

@@ -1,6 +1,7 @@
 """Reading a bank or card CSV export through a per-account column mapping."""
 from __future__ import annotations
 
+import codecs
 import csv
 import io
 import json
@@ -8,10 +9,12 @@ import re
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Container, Dict, List, Optional, Tuple
 
 from .errors import BooksError
 from .money import parse_cents
+from .periods import FIRST_YEAR, LAST_YEAR
+from .text import clean_cell
 
 _FIELDS = (
     "date_column",
@@ -28,7 +31,18 @@ _FIELDS = (
     "skip_lines",
     "delimiter",
     "encoding",
+    "column_names",
+    "direction_column",
+    "debit_values",
+    "credit_values",
 )
+
+# Past this it is not a bank export, and reading it could take all the memory there is.
+MAX_FILE_BYTES = 500 * 1024 * 1024
+# No bank writes this much in one cell. Rules run over this text, so it stays bounded.
+MAX_TEXT = 2000
+# How far down a file to look for the header row when it is not where the mapping says.
+_HEADER_SEARCH_ROWS = 50
 
 # A label in place of a date marks a summary line, whatever figures follow it.
 _SUMMARY_LABEL = re.compile(
@@ -41,7 +55,8 @@ _SUMMARY_LABEL = re.compile(
 _DATED_BALANCE_LINE = re.compile(
     r"^((sub|grand |statement |account |period )?totals?"
     r"|(beginning|ending|opening|closing|starting|available|current|previous|new|statement|account) balance"
-    r"|balance (forward|brought forward|carried forward))$",
+    r"|balance (forward|brought forward|carried forward))"
+    r"( as of .*)?$",
     re.IGNORECASE,
 )
 
@@ -66,8 +81,28 @@ class Mapping:
     skip_lines: int = 0
     delimiter: str = ","
     encoding: Optional[str] = None
+    column_names: Optional[List[str]] = None
+    direction_column: Optional[str] = None
+    debit_values: List[str] = field(default_factory=lambda: ["debit", "dr", "d"])
+    credit_values: List[str] = field(default_factory=lambda: ["credit", "cr", "c"])
 
     def validate(self) -> None:
+        for name in _FIELDS:
+            if name.endswith(("_column", "_format")) or name in ("delimiter", "encoding"):
+                value = getattr(self, name)
+                if value is not None and not isinstance(value, str):
+                    raise BooksError(f"{name} must be text")
+        for name in ("skip_statuses", "debit_values", "credit_values"):
+            value = getattr(self, name)
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                raise BooksError(f"{name} must be a list of text values")
+        if self.column_names is not None:
+            if (
+                not isinstance(self.column_names, list)
+                or not self.column_names
+                or not all(isinstance(item, str) for item in self.column_names)
+            ):
+                raise BooksError("column_names must be a list of text values")
         has_amount = bool(self.amount_column)
         has_pair = bool(self.debit_column) and bool(self.credit_column)
         if has_amount == has_pair or (has_amount and (self.debit_column or self.credit_column)):
@@ -76,19 +111,23 @@ class Mapping:
             raise BooksError("a mapping needs date_column and description_column")
         if not self.date_format:
             raise BooksError("a mapping needs date_format")
-        if len(self.delimiter) != 1:
+        if self.delimiter is None or len(self.delimiter) != 1 or self.delimiter in ('"', "\r", "\n"):
             raise BooksError("delimiter must be one character")
-        if not isinstance(self.skip_lines, int) or self.skip_lines < 0:
+        if isinstance(self.skip_lines, bool) or not isinstance(self.skip_lines, int) or self.skip_lines < 0:
             raise BooksError("skip_lines must be a whole number, zero or more")
-        if not isinstance(self.skip_statuses, list):
-            raise BooksError("skip_statuses must be a list")
         if not isinstance(self.invert_amount, bool):
             raise BooksError("invert_amount must be true or false, without quotes")
-        for name in _FIELDS:
-            if name.endswith(("_column", "_format")) or name in ("delimiter", "encoding"):
-                value = getattr(self, name)
-                if value is not None and not isinstance(value, str):
-                    raise BooksError(f"{name} must be text")
+        if self.direction_column and not self.amount_column:
+            raise BooksError("direction_column goes with amount_column")
+        if self.encoding:
+            try:
+                codecs.lookup(self.encoding)
+            except LookupError:
+                raise BooksError(f"unknown encoding {self.encoding!r}. Try utf-8 or cp1252.") from None
+        try:
+            datetime(2001, 2, 3).strftime(self.date_format)
+        except ValueError:
+            raise BooksError(f"date_format {self.date_format!r} is not a usable date format") from None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=1)
@@ -121,6 +160,8 @@ class Mapping:
             text = Path(path).read_text(encoding="utf-8-sig")
         except OSError as exc:
             raise BooksError(f"cannot read mapping file {path}: {exc.strerror}") from None
+        except UnicodeDecodeError:
+            raise BooksError(f"mapping file {path} is not UTF-8 text") from None
         return cls.from_json(text)
 
 
@@ -142,21 +183,108 @@ class ParsedFile:
     data_rows: int = 0
 
 
-def read_text(path: Path, encoding: Optional[str]) -> str:
-    """Decode an export. UTF-8 (with or without a byte order mark) first, then Windows-1252."""
+def read_bytes(path: Path) -> bytes:
+    path = Path(path)
     try:
-        data = Path(path).read_bytes()
+        if path.stat().st_size > MAX_FILE_BYTES:
+            raise BooksError(f"{path.name} is larger than {MAX_FILE_BYTES // (1024 * 1024)} MB, which is not a normal export.")
+        return path.read_bytes()
     except OSError as exc:
         raise BooksError(f"cannot read {path}: {exc.strerror}") from None
+    except MemoryError:
+        raise BooksError(f"{path.name} is too large to read on this computer.") from None
+
+
+def _wrong_kind(data: bytes) -> Optional[str]:
+    """Name a file that is plainly not a text export, so the message can say what to do instead."""
+    start = data[:512].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+    if data.startswith(b"PK\x03\x04"):
+        return "a compressed file or an Excel workbook. Save or download it as CSV"
+    if data.startswith(b"\xd0\xcf\x11\xe0"):
+        return "an old Excel workbook. Save or download it as CSV"
+    if data.startswith(b"%PDF"):
+        return "a PDF. Download the transactions as CSV or OFX from your bank instead of the statement PDF"
+    if data.startswith(b"SQLite format 3"):
+        return "a database, not an export"
+    if start.startswith((b"<!doctype html", b"<html")):
+        return "a web page, often a sign-in page saved in place of the download. Download the file again"
+    if start.startswith(b"!type:") or start.startswith(b"!account"):
+        return "a QIF file, which is not read here. Choose CSV or OFX/QFX in your bank's download options"
+    return None
+
+
+def decode(data: bytes, name: str, encoding: Optional[str] = None) -> str:
+    """Bytes to text: a stated encoding, or by byte order mark, then UTF-8, then Windows-1252."""
+    wrong = _wrong_kind(data)
+    if wrong:
+        raise BooksError(f"{name} is {wrong}.")
     if encoding:
         try:
-            return data.decode(encoding)
+            text = data.decode(encoding)
         except (LookupError, UnicodeDecodeError) as exc:
-            raise BooksError(f"cannot read {path} as {encoding}: {exc}") from None
+            raise BooksError(f"cannot read {name} as {encoding}: {exc}") from None
+    elif data.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        text = _decode_or_refuse(data, "utf-32", name)
+    elif data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        text = _decode_or_refuse(data, "utf-16", name)
+    elif _looks_like_bare_utf16(data):
+        text = _decode_or_refuse(data, "utf-16-le" if data[1] == 0 else "utf-16-be", name)
+    else:
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = data.decode("cp1252", errors="replace")
+    if "\x00" in text:
+        raise BooksError(f"{name} holds binary data, so it is not a text export. Download it again as CSV.")
+    return text
+
+
+def _decode_or_refuse(data: bytes, encoding: str, name: str) -> str:
     try:
-        return data.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return data.decode("cp1252", errors="replace")
+        return data.decode(encoding)
+    except UnicodeDecodeError as exc:
+        raise BooksError(f"{name} looks like {encoding} but cannot be read as it: {exc.reason}.") from None
+
+
+def _looks_like_bare_utf16(data: bytes) -> bool:
+    """UTF-16 without a byte order mark: ordinary text has a zero in every other byte."""
+    sample = data[:400]
+    if len(sample) < 8:
+        return False
+    return sample[1::2].count(0) * 10 > len(sample[1::2]) * 9 or sample[0::2].count(0) * 10 > len(sample[0::2]) * 9
+
+
+def read_text(path: Path, encoding: Optional[str]) -> str:
+    return decode(read_bytes(path), Path(path).name, encoding)
+
+
+def read_rows(text: str, delimiter: str, name: str) -> List[Tuple[int, List[str]]]:
+    """Every row with the line it starts on. A file the CSV reader cannot follow stops here, plainly."""
+    reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
+    rows: List[Tuple[int, List[str]]] = []
+    start = 1
+    try:
+        for row in reader:
+            rows.append((start, row))
+            start = reader.line_num + 1
+    except csv.Error as exc:
+        raise BooksError(f"{name} line {reader.line_num}: this is not a well-formed CSV file ({exc}).") from None
+    if rows and reader.line_num > rows[-1][0]:
+        _check_last_row_closes(text, delimiter, name, rows[-1][0])
+    return rows
+
+
+def _check_last_row_closes(text: str, delimiter: str, name: str, line: int) -> None:
+    """A quote that never closes makes one row out of everything after it. That must not pass as a row."""
+    tail = "".join(io.StringIO(text, newline="").readlines()[line - 1:])
+    try:
+        list(csv.reader(io.StringIO(tail, newline=""), delimiter=delimiter, strict=True))
+    except csv.Error as exc:
+        if "unexpected end" in str(exc).lower():
+            raise BooksError(
+                f"{name} line {line}: a quotation mark opens here and never closes, so the rest of the file "
+                "cannot be read as rows. The download may be cut short. Nothing was read from it."
+            ) from None
 
 
 def _header_index(header: List[str]) -> Dict[str, int]:
@@ -166,13 +294,13 @@ def _header_index(header: List[str]) -> Dict[str, int]:
     return index
 
 
-def _column(index: Dict[str, int], name: Optional[str], header: List[str], path: Path) -> Optional[int]:
+def _column(index: Dict[str, int], name: Optional[str], header: List[str], file_name: str) -> Optional[int]:
     if not name:
         return None
     position = index.get(name.strip().lower())
     if position is None:
-        found = ", ".join(repr(h.strip()) for h in header)
-        raise BooksError(f"{Path(path).name} has no column {name!r}. Columns found: {found}")
+        found = ", ".join(repr(clean_cell(h)[:60]) for h in header[:40])
+        raise BooksError(f"{file_name} has no column {name!r}. Columns found: {found}")
     return position
 
 
@@ -189,13 +317,30 @@ def _cell(row: List[str], position: Optional[int]) -> str:
     return row[position].strip()
 
 
-def _amount(row: List[str], amount: Optional[int], debit: Optional[int], credit: Optional[int], invert: bool) -> Optional[int]:
+def _amount(
+    row: List[str],
+    amount: Optional[int],
+    debit: Optional[int],
+    credit: Optional[int],
+    invert: bool,
+    direction: Optional[int] = None,
+    debit_values: Container[str] = (),
+    credit_values: Container[str] = (),
+) -> Optional[int]:
     """Signed cents, positive for money in. None when the row holds no amount at all."""
     if amount is not None:
         text = _cell(row, amount)
         if not text:
             return None
         cents = parse_cents(text)
+        if direction is not None:
+            word = _cell(row, direction).lower()
+            if word in debit_values:
+                cents = -abs(cents)
+            elif word in credit_values:
+                cents = abs(cents)
+            else:
+                raise BooksError(f"cannot tell money in from money out: {_cell(row, direction)!r}")
     else:
         debit_text, credit_text = _cell(row, debit), _cell(row, credit)
         if not debit_text and not credit_text:
@@ -209,32 +354,64 @@ def _amount(row: List[str], amount: Optional[int], debit: Optional[int], credit:
     return -cents if invert else cents
 
 
-def parse_export(path: Path, mapping: Mapping) -> ParsedFile:
-    """Read every data row. Bad rows are collected, not raised, so one report covers them all."""
-    text = read_text(path, mapping.encoding)
-    reader = csv.reader(io.StringIO(text, newline=""), delimiter=mapping.delimiter)
-    rows = list(reader)
-    body_start = mapping.skip_lines
-    while body_start < len(rows) and not any(cell.strip() for cell in rows[body_start]):
-        body_start += 1
-    if body_start >= len(rows):
-        raise BooksError(f"{Path(path).name} has no header row (skip_lines is {mapping.skip_lines})")
+def _mapped_columns(mapping: Mapping) -> List[str]:
+    names = (
+        mapping.date_column, mapping.description_column, mapping.amount_column, mapping.debit_column,
+        mapping.credit_column, mapping.memo_column, mapping.reference_column, mapping.status_column,
+        mapping.direction_column,
+    )
+    return [name.strip().lower() for name in names if name]
 
-    header = rows[body_start]
+
+def _find_header(rows: List[Tuple[int, List[str]]], start: int, mapping: Mapping) -> int:
+    """The row named by skip_lines, unless a later one is the one naming every mapped column.
+
+    Banks vary the lines above the header from one download to the next, so this does not depend on counting them.
+    """
+    while start < len(rows) and not any(cell.strip() for cell in rows[start][1]):
+        start += 1
+    wanted = _mapped_columns(mapping)
+    for position in range(start, min(start + _HEADER_SEARCH_ROWS, len(rows))):
+        names = {cell.strip().lower() for cell in rows[position][1]}
+        if all(name in names for name in wanted):
+            return position
+    return start
+
+
+def parse_export(path: Path, mapping: Mapping) -> ParsedFile:
+    return parse_text(read_text(path, mapping.encoding), mapping, Path(path).name)
+
+
+def parse_text(text: str, mapping: Mapping, name: str) -> ParsedFile:
+    """Read every data row. Bad rows are collected, not raised, so one report covers them all."""
+    rows = read_rows(text, mapping.delimiter, name)
+    if mapping.column_names:
+        header = list(mapping.column_names)
+        body = rows[mapping.skip_lines:]
+    else:
+        body_start = _find_header(rows, mapping.skip_lines, mapping)
+        if body_start >= len(rows):
+            raise BooksError(f"{name} has no header row (skip_lines is {mapping.skip_lines})")
+        header = rows[body_start][1]
+        body = rows[body_start + 1:]
+
     index = _header_index(header)
-    date_col = _column(index, mapping.date_column, header, path)
-    desc_col = _column(index, mapping.description_column, header, path)
-    amount_col = _column(index, mapping.amount_column, header, path)
-    debit_col = _column(index, mapping.debit_column, header, path)
-    credit_col = _column(index, mapping.credit_column, header, path)
-    memo_col = _column(index, mapping.memo_column, header, path)
-    ref_col = _column(index, mapping.reference_column, header, path)
-    status_col = _column(index, mapping.status_column, header, path)
+    date_col = _column(index, mapping.date_column, header, name)
+    desc_col = _column(index, mapping.description_column, header, name)
+    amount_col = _column(index, mapping.amount_column, header, name)
+    debit_col = _column(index, mapping.debit_column, header, name)
+    credit_col = _column(index, mapping.credit_column, header, name)
+    memo_col = _column(index, mapping.memo_column, header, name)
+    ref_col = _column(index, mapping.reference_column, header, name)
+    status_col = _column(index, mapping.status_column, header, name)
+    direction_col = _column(index, mapping.direction_column, header, name)
     skip_statuses = {s.strip().lower() for s in mapping.skip_statuses}
+    debit_values = {s.strip().lower() for s in mapping.debit_values}
+    credit_values = {s.strip().lower() for s in mapping.credit_values}
     width = len(_without_trailing_blanks(header))
 
     parsed = ParsedFile()
-    for offset, row in enumerate(rows[body_start + 1:], start=body_start + 2):
+    for offset, row in body:
         if not any(cell.strip() for cell in row):
             continue
         parsed.data_rows += 1
@@ -258,7 +435,9 @@ def parse_export(path: Path, mapping: Mapping) -> ParsedFile:
             )
             continue
         try:
-            amount = _amount(row, amount_col, debit_col, credit_col, mapping.invert_amount)
+            amount = _amount(
+                row, amount_col, debit_col, credit_col, mapping.invert_amount, direction_col, debit_values, credit_values
+            )
         except BooksError as exc:
             parsed.errors.append(f"line {offset}: {exc}")
             continue
@@ -276,17 +455,22 @@ def parse_export(path: Path, mapping: Mapping) -> ParsedFile:
             parsed.errors.append(f"line {offset}: date {date_text!r} does not fit format {mapping.date_format}")
             continue
         posted_on = datetime.strptime(date_text, mapping.date_format).date()
+        if not FIRST_YEAR <= posted_on.year <= LAST_YEAR:
+            parsed.errors.append(f"line {offset}: date {date_text!r} reads as the year {posted_on.year}")
+            continue
         # Zero rows are bank notices. They do not move a balance.
         if amount == 0:
             parsed.skipped += 1
             continue
-        description = _cell(row, desc_col)
+        description = clean_cell(_cell(row, desc_col))
         if not description:
             parsed.errors.append(f"line {offset}: no description")
             continue
-        parsed.rows.append(
-            ParsedRow(offset, posted_on, amount, description, _cell(row, memo_col), _cell(row, ref_col))
-        )
+        memo, reference = clean_cell(_cell(row, memo_col)), clean_cell(_cell(row, ref_col))
+        if max(len(description), len(memo), len(reference)) > MAX_TEXT:
+            parsed.errors.append(f"line {offset}: a cell is longer than {MAX_TEXT} characters, which no bank writes")
+            continue
+        parsed.rows.append(ParsedRow(offset, posted_on, amount, description, memo, reference))
     return parsed
 
 
@@ -307,6 +491,7 @@ _AMOUNT_NAMES = ("amount", "transaction amount", "amt")
 _DEBIT_NAMES = ("debit", "debits", "withdrawal", "withdrawals", "money out", "charge", "charges")
 _CREDIT_NAMES = ("credit", "credits", "deposit", "deposits", "money in", "payment", "payments")
 _REFERENCE_NAMES = ("transaction id", "reference", "reference number", "ref", "ref.", "fitid", "id", "check number", "check or slip #")
+_DIRECTION_NAMES = ("credit debit indicator", "debit/credit", "credit/debit", "dr/cr", "cr/dr", "indicator")
 _STATUS_NAMES = ("status", "state")
 
 
@@ -323,7 +508,7 @@ def suggest_mapping(path: Path) -> Tuple[Mapping, List[str]]:
     # Look past the first line, because a bank's preamble may hold no delimiter at all.
     opening = "\n".join(text.split("\n")[:20])
     delimiter = max((",", ";", "\t", "|"), key=opening.count) if opening else ","
-    rows = list(csv.reader(io.StringIO(text, newline=""), delimiter=delimiter))
+    rows = [row for _, row in read_rows(text, delimiter, Path(path).name)]
     if not rows:
         raise BooksError(f"{Path(path).name} is empty")
 
@@ -358,7 +543,12 @@ def suggest_mapping(path: Path) -> Tuple[Mapping, List[str]]:
     amount_at = _find_name(_AMOUNT_NAMES, lowered)
     if amount_at is not None:
         mapping.amount_column = header[amount_at]
-        notes.append("Check the sign in a dry run: charges must show as money out. If not, set invert_amount to true.")
+        direction_at = _find_name(_DIRECTION_NAMES, lowered)
+        if direction_at is not None:
+            mapping.direction_column = header[direction_at]
+            notes.append(f"Using {header[direction_at]!r} to tell money in from money out. Check the sign in a dry run.")
+        else:
+            notes.append("Check the sign in a dry run: charges must show as money out. If not, set invert_amount to true.")
     else:
         mapping.amount_column = None
         mapping.debit_column = header[_find_name(_DEBIT_NAMES, lowered)]

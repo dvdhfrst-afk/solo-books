@@ -1,0 +1,13 @@
+Description,,Summary Amt.
+Beginning balance as of 03/01/2025,,"1,000.00"
+Total credits,,"515.00"
+Total debits,,"-126.49"
+Ending balance as of 03/31/2025,,"1,388.51"
+
+Date,Description,Amount,Running Bal.
+03/01/2025,Beginning balance as of 03/01/2025,,"1,000.00"
+03/03/2025,"BLUE FERN CAFE OGDEN UT","-12.50","987.50"
+03/05/2025,"HARBOR PAPER SUPPLY","-89.99","897.51"
+03/07/2025,"NORTHWIND HOSTING","-24.00","873.51"
+03/12/2025,"RETURN HARBOR PAPER SUPPLY","15.00","888.51"
+03/20/2025,"EXAMPLE PAYMENT RECEIVED","500.00","1388.51"

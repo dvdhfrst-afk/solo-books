@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .books import book_to_printed, printed_to_book
-from .csvmap import ParsedRow, parse_export
+from .csvmap import ParsedRow
 from .db import transaction
 from .errors import BooksError
-from .importer import account_mapping
+from .importer import read_export
 from .ledger import balance_through, find_transactions
 from .money import format_cents
 from .periods import Period, parse_iso_date
@@ -234,7 +234,7 @@ def _compare_statement(
     account: sqlite3.Row, report: ReconcileReport, rows: List[sqlite3.Row], path: Path, skip_bad: bool = False
 ) -> None:
     """Pair statement lines with book rows: same day and amount, then near day, then changed amount."""
-    parsed = parse_export(path, account_mapping(account))
+    parsed, _, _ = read_export(account, path)
     if parsed.errors and not skip_bad:
         raise BooksError(
             f"{path.name}: cannot compare, unreadable rows:\n  " + "\n  ".join(parsed.errors[:20])

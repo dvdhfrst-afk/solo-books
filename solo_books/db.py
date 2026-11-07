@@ -3,14 +3,22 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
+import tempfile
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator, List, Optional
 
 from .errors import BooksError
+from .files import SQLITE_MAGIC
 
 DEFAULT_DB_NAME = "books.sqlite3"
 DB_ENV_VAR = "SOLO_BOOKS_DB"
+# Marks a file as solo-books in the SQLite header ("SOLO"), so another program's database is never touched.
+APPLICATION_ID = 0x534F4C4F
+BUSY_SECONDS = 10
+RECOVERY_DOC = "docs/RECOVERY.md"
 
 # Each entry moves the file forward one version. PRAGMA user_version records how far it has come.
 # Append new entries; never edit one that has shipped.
@@ -156,6 +164,14 @@ MIGRATIONS = [
         PRIMARY KEY (business_id, tax_year)
     );
     """,
+    """
+    CREATE TABLE meta (
+        key    TEXT PRIMARY KEY,
+        value  TEXT NOT NULL
+    );
+    PRAGMA application_id = 1397705807;
+    CREATE INDEX transactions_by_amount ON transactions (account_id, amount_cents, posted_on);
+    """,
 ]
 
 
@@ -163,29 +179,151 @@ def resolve_db_path(explicit: Optional[str]) -> Path:
     return Path(explicit or os.environ.get(DB_ENV_VAR) or DEFAULT_DB_NAME)
 
 
+def friendly_error(path: Path, exc: sqlite3.Error) -> BooksError:
+    """Say what a SQLite failure means for the person, and what to do about it."""
+    text = str(exc).lower()
+    if "locked" in text or "busy" in text:
+        return BooksError(f"the books at {path} are busy: another program has them open. Nothing was changed. Close it and try again.")
+    if "readonly" in text or "read-only" in text:
+        return BooksError(f"the books at {path} are read-only, so nothing was saved. Check the file's permissions.")
+    if "full" in text:
+        return BooksError(f"the disk holding {path} is full. Nothing was saved. Free some space and try again.")
+    if "malformed" in text or "not a database" in text or "disk image" in text or "corrupt" in text:
+        return BooksError(
+            f"the books at {path} look damaged ({exc}). Keep a copy of the file as it is, then run 'check'. "
+            f"{RECOVERY_DOC} walks through what to do next."
+        )
+    if "unable to open" in text:
+        return BooksError(f"cannot open the books at {path}. Check that the folder exists and that you may write to it.")
+    return BooksError(f"the books at {path} could not be used: {exc}")
+
+
+def _check_file(path: Path, create: bool) -> None:
+    if path.is_dir():
+        raise BooksError(f"{path} is a folder, not a books file.")
+    if not path.exists():
+        if not create:
+            raise BooksError(f"no books at {path}. Run 'init' first, or point --db at your file.")
+        return
+    try:
+        with open(path, "rb") as handle:
+            start = handle.read(len(SQLITE_MAGIC))
+    except OSError as exc:
+        raise BooksError(f"cannot read {path}: {exc.strerror}") from None
+    if not start:
+        if not create:
+            raise BooksError(f"{path} is an empty file, not books. Run 'init' to start books there.")
+        return
+    if start != SQLITE_MAGIC:
+        raise BooksError(
+            f"{path} is not a solo-books file. If it used to be your books, it is damaged: see {RECOVERY_DOC}."
+        )
+
+
+def _create_private(path: Path) -> None:
+    """New books are readable by their owner only, where the system has such a thing."""
+    if path.exists():
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.close(os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except OSError as exc:
+        raise BooksError(f"cannot create {path}: {exc.strerror}") from None
+
+
 def connect(path: Path, create: bool = False) -> sqlite3.Connection:
     """Open the books. Without create, a missing file is an error rather than empty books."""
     path = Path(path)
-    if not create and not path.exists():
-        raise BooksError(f"no books at {path}. Run 'init' first, or point --db at your file.")
-    conn = sqlite3.connect(str(path), isolation_level=None)
+    _check_file(path, create)
+    if create:
+        _create_private(path)
+    try:
+        conn = sqlite3.connect(str(path), isolation_level=None, timeout=BUSY_SECONDS)
+    except sqlite3.Error as exc:
+        raise friendly_error(path, exc) from None
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    _migrate(conn, path)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        _migrate(conn, path, create)
+    except sqlite3.Error as exc:
+        conn.close()
+        raise friendly_error(path, exc) from None
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
-def _migrate(conn: sqlite3.Connection, path: Path) -> None:
-    try:
-        version = conn.execute("PRAGMA user_version").fetchone()[0]
-    except sqlite3.DatabaseError as exc:
-        raise BooksError(f"{path} is not a solo-books file: {exc}") from None
+def schema_version() -> int:
+    return len(MIGRATIONS)
+
+
+def _refuse_foreign(path: Path) -> None:
+    raise BooksError(f"{path} is a database, but it does not hold solo-books. It was left as it is.")
+
+
+def _migrate(conn: sqlite3.Connection, path: Path, create: bool) -> None:
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    application_id = conn.execute("PRAGMA application_id").fetchone()[0]
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if version == 0:
+        if tables or not create:
+            _refuse_foreign(path)
+    elif version == 1:
+        # The first schema predates the marker in the header, so go by its tables.
+        if application_id != 0 or not {"businesses", "accounts", "transactions", "categories"} <= tables:
+            _refuse_foreign(path)
+    elif application_id != APPLICATION_ID:
+        _refuse_foreign(path)
     if version > len(MIGRATIONS):
-        raise BooksError(f"{path} was written by a newer version of solo-books.")
-    for number in range(version, len(MIGRATIONS)):
-        conn.executescript(
-            f"BEGIN;\n{MIGRATIONS[number]}\nPRAGMA user_version = {number + 1};\nCOMMIT;"
+        raise BooksError(
+            f"{path} was written by a newer version of solo-books (schema {version}; this one reads up to "
+            f"{len(MIGRATIONS)}). Install the newer version. The file was left as it is."
         )
+    if version == len(MIGRATIONS):
+        return
+    if version > 0:
+        _copy_before_upgrade(conn, path, version)
+    for number in range(version, len(MIGRATIONS)):
+        _apply(conn, number)
+
+
+def _copy_before_upgrade(conn: sqlite3.Connection, path: Path, version: int) -> None:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    copy = path.with_name(f"{path.stem}.schema-{version}-{stamp}{path.suffix}")
+    try:
+        backup(conn, copy, remember=False)
+    except BooksError as exc:
+        raise BooksError(f"these books need an upgrade, and the safety copy could not be written: {exc}") from None
+    print(
+        f"solo-books: upgrading {path} from schema {version} to {len(MIGRATIONS)}. A copy of the old file is at {copy}.",
+        file=sys.stderr,
+    )
+
+
+def _statements(script: str) -> List[str]:
+    found, buffer = [], ""
+    for line in script.splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            found.append(buffer)
+            buffer = ""
+    return found
+
+
+def _apply(conn: sqlite3.Connection, number: int) -> None:
+    """One schema step, in one transaction. A crash or a second process leaves the file at a whole version."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if conn.execute("PRAGMA user_version").fetchone()[0] == number:
+            for statement in _statements(MIGRATIONS[number]):
+                conn.execute(statement)
+            conn.execute(f"PRAGMA user_version = {number + 1}")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
 
 
 @contextmanager
@@ -198,18 +336,54 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     try:
         yield conn
     except BaseException:
-        conn.execute("ROLLBACK")
+        # SQLite rolls back by itself on some failures, such as a full disk.
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
         raise
     conn.execute("COMMIT")
 
 
-def backup(conn: sqlite3.Connection, destination: Path) -> None:
-    """Write a consistent copy of the books to a new file."""
+def get_meta(conn: sqlite3.Connection, key: str) -> Optional[str]:
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", (key, value)
+    )
+
+
+def backup(conn: sqlite3.Connection, destination: Path, remember: bool = True) -> None:
+    """Write a consistent, checked copy of the books to a new file. The file appears only when it is whole."""
     destination = Path(destination)
     if destination.exists():
         raise BooksError(f"{destination} already exists; backups never overwrite a file.")
-    target = sqlite3.connect(str(destination))
+    parent = destination.parent if str(destination.parent) else Path(".")
+    if not parent.is_dir():
+        raise BooksError(f"cannot write {destination}: the folder {parent} does not exist.")
+    temporary = None
     try:
-        conn.backup(target)
+        handle, temporary = tempfile.mkstemp(dir=str(parent), prefix=f".{destination.name}.", suffix=".partial")
+        os.close(handle)
+        target = sqlite3.connect(temporary)
+        try:
+            conn.backup(target)
+            verdict = target.execute("PRAGMA integrity_check").fetchone()[0]
+        finally:
+            target.close()
+        if verdict != "ok":
+            raise BooksError(f"the copy fails its integrity check ({verdict}), so it was not kept. Run 'check'.")
+        os.replace(temporary, destination)
+        temporary = None
+    except OSError as exc:
+        raise BooksError(f"cannot write {destination}: {exc.strerror or exc}") from None
     finally:
-        target.close()
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+    if remember:
+        try:
+            set_meta(conn, "last_backup_at", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
+        except sqlite3.OperationalError:
+            # The copy is good. Read-only books just cannot note when it was made.
+            pass
