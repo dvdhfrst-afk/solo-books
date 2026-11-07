@@ -376,6 +376,49 @@ class AtomicWrites(BooksCase):
         self.assertFalse(out_dir.exists())
 
 
+class OutputTrouble(BooksCase):
+    def run_with_stdout(self, stream) -> int:
+        with mock.patch("sys.stdout", stream), mock.patch("sys.stderr", io.StringIO()) as err:
+            code = cli.main(["--db", str(self.db_path), "status"])
+        self.said = err.getvalue()
+        return code
+
+    def test_a_full_disk_under_a_redirect_is_reported(self) -> None:
+        class Full(io.StringIO):
+            def flush(self) -> None:
+                raise OSError(28, "No space left on device")
+
+        self.assertEqual(self.run_with_stdout(Full()), 2)
+        self.assertIn("No space left", self.said)
+
+    def test_a_reader_that_left_is_not_an_error(self) -> None:
+        class Gone(io.StringIO):
+            def flush(self) -> None:
+                raise BrokenPipeError(32, "Broken pipe")
+
+        self.assertEqual(self.run_with_stdout(Gone()), 0)
+
+    def test_redirected_text_stays_whole_on_any_code_page(self) -> None:
+        self.ok("business", "add", "\u6771\u4eac Business")
+        env = dict(os.environ, PYTHONPATH=str(REPO_ROOT))
+        env.pop("PYTHONIOENCODING", None)
+        done = subprocess.run(
+            [sys.executable, "-m", "solo_books", "--db", str(self.db_path), "business", "list"],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertEqual(done.returncode, 0)
+        self.assertIn("\u6771\u4eac Business", done.stdout.decode("utf-8"))
+
+    def test_awkward_folder_names_work_everywhere(self) -> None:
+        folder = self.dir / "\u65e5\u672c #1 %41 it's"
+        folder.mkdir()
+        books = folder / "my books.sqlite3"
+        for args in (("init",), ("business", "add", "X"), ("check",), ("backup",), ("salvage", str(folder / "s.sqlite3")), ("status",)):
+            self.assertEqual(self.run_cli("--db", str(books), *args)[0], 0, args)
+        kept = [path for path in folder.iterdir() if "-backup-" in path.name][0]
+        self.assertEqual(self.run_cli("--db", str(books), "restore", str(kept))[0], 0)
+
+
 class Interrupted(BooksCase):
     """A real process, really killed, in the middle of a real import."""
 

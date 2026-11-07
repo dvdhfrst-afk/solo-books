@@ -363,11 +363,11 @@ Rules run in priority order, lowest number first, and the first match wins. Each
 `--direction in` or `out`, `--min`, `--max` and `--account`.
 
 ```bash
-python -m solo_books rules add --business "Business A" --contains "NOTION" --category "Software subscriptions"
+python -m solo_books rules add --business "Business A" --contains "LEDGERLY" --category "Software subscriptions"
 ```
 
 ```bash
-python -m solo_books rules test "NOTION LABS SUBSCRIPTION" --business "Business A"
+python -m solo_books rules test "LEDGERLY LABS SUBSCRIPTION" --business "Business A"
 ```
 
 ```bash

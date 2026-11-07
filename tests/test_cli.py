@@ -217,7 +217,7 @@ class Workflow(BooksCase):
         self.ok("categorize", "--clear")
         path = self.dir / "pnl.csv"
         self.assertIn("Wrote", self.ok("report", "pnl", "--period", "2025", "--format", "csv", "-o", str(path)))
-        self.assertTrue(any("not tax advice" in row["category"] for row in read_csv(path)))
+        self.assertTrue(any("not tax or accounting advice" in row["category"] for row in read_csv(path)))
         path = self.dir / "c.csv"
         self.assertIn("Wrote", self.ok("report", "schedule-c", "--year", "2025", "--format", "csv", "-o", str(path)))
         text_path = self.dir / "c.txt"

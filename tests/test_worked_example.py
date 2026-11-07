@@ -195,11 +195,11 @@ class WorkedExample(BooksCase):
     def test_preparer_export_carries_the_same_figures(self) -> None:
         out_dir = self.dir / "for-preparer"
         output = self.ok("report", "preparer", "--year", "2025", "--out", str(out_dir))
-        self.assertIn("not tax advice", output)
+        self.assertIn("not tax or accounting advice", output)
         rollup = read_csv(out_dir / "business-a-schedule-c-2025.csv")
         lines = {row["line"]: row["amount"] for row in rollup if row["line"]}
         self.assertEqual(lines["31"], self.expected["business_a"]["schedule_c_2025"]["31"])
-        self.assertTrue(any("not tax advice" in row["description"] for row in rollup))
+        self.assertTrue(any("not tax or accounting advice" in row["description"] for row in rollup))
         self.assertTrue(any("irs.gov" in row["description"] for row in rollup))
         detail = read_csv(out_dir / "business-b-transactions-2025.csv")
         self.assertEqual(len(detail), 9)

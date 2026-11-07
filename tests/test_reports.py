@@ -78,7 +78,7 @@ class ProfitAndLoss(ReportBase):
         out = self.ok("report", "pnl", "--period", "2025-Q1", "--business", "Business A", "--by", "month")
         self.assertIn("1,234.56", out)
         self.assertIn("2025-03", out)
-        self.assertIn("not tax advice", out)
+        self.assertIn("not tax or accounting advice", out)
 
     def test_many_small_rows_keep_every_cent(self) -> None:
         # 0.07 and 0.10 are the classic values that drift in floating point.
@@ -176,7 +176,7 @@ class ScheduleCRollup(ReportBase):
         self.assertEqual(report.amount("24b"), 10000)
         out = self.ok("report", "schedule-c", "--year", "2025")
         self.assertIn("full amount booked", out)
-        self.assertIn("not tax advice", out)
+        self.assertIn("not tax or accounting advice", out)
 
     def test_text_output_stamps_its_source_and_hides_empty_lines(self) -> None:
         self.book("6000", -1000)

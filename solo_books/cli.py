@@ -1017,7 +1017,7 @@ def cmd_web(args) -> int:
         server = web.ReviewServer(path, args.port, verbose=args.verbose)
     except OSError as exc:
         raise BooksError(f"cannot listen on port {args.port}: {exc.strerror}. Another program may have it. Try --port.") from None
-    print(f"Review queue at {server.url}  (Ctrl+C stops it)")
+    print(f"Review queue at {server.url}  (Ctrl+C stops it)", flush=True)
     if args.open:
         webbrowser.open(server.url)
     try:
@@ -1411,23 +1411,34 @@ def _guarded(args) -> int:
         return EXIT_INTERNAL_ERROR
 
 
-def _flush_quietly() -> None:
-    """A reader such as 'head' may be gone already. That is not an error worth a message at exit."""
+def _discard_stdout() -> None:
+    """Stop Python's own flush at exit from failing again."""
+    try:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+def _finish_output(code: int) -> int:
+    """A reader such as 'head' may be gone already, which is fine. A full disk under a redirect is not."""
     try:
         sys.stdout.flush()
     except BrokenPipeError:
-        try:
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-        except (OSError, ValueError):
-            pass
-    except (OSError, ValueError):
-        pass
+        _discard_stdout()
+    except (OSError, ValueError) as exc:
+        _discard_stdout()
+        if code in (EXIT_OK, EXIT_FINDING):
+            print(f"solo-books: the output could not be written: {getattr(exc, 'strerror', None) or exc}.", file=sys.stderr)
+            return EXIT_USER_ERROR
+    return code
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
-            stream.reconfigure(errors="replace")
+            # Sent to a file or a pipe, text stays whole whatever the system's old code page can show.
+            piped = not stream.isatty() and not os.environ.get("PYTHONIOENCODING")
+            stream.reconfigure(encoding="utf-8" if piped else None, errors="replace")
     real_out, real_err = sys.stdout, sys.stderr
     sys.stdout, sys.stderr = _PrintableOnly(real_out), _PrintableOnly(real_err)
     try:
@@ -1435,8 +1446,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         args = parser.parse_args(_attach_negative_amounts(sys.argv[1:] if argv is None else list(argv)))
         if not hasattr(args, "db"):
             args.db = None
-        code = _guarded(args)
-        _flush_quietly()
-        return code
+        return _finish_output(_guarded(args))
     finally:
         sys.stdout, sys.stderr = real_out, real_err

@@ -18,7 +18,7 @@ from .money import format_cents
 from .periods import Period, parse_iso_date, split_period, year_period
 from .schedule_c import Form, line_label, load_form
 
-NOT_ADVICE = "Bookkeeping summary, not tax advice."
+NOT_ADVICE = "Bookkeeping summary, not tax or accounting advice."
 
 _SECTION_SIGN = {"income": 1, "returns": -1, "cogs": -1, "expense": -1}
 

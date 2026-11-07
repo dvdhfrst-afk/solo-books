@@ -37,18 +37,18 @@ class CheckReport:
 
 def _open_read_only(path: Path) -> sqlite3.Connection:
     """Open without changing anything, unless an interrupted write has to be rolled back first."""
-    uri = f"{path.resolve().as_uri()}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True, timeout=BUSY_SECONDS)
+    conn = None
+    try:
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=BUSY_SECONDS)
+        conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
+    except sqlite3.OperationalError:
+        # A network path, or an interrupted write that has to be rolled back first.
+        if conn is not None:
+            conn.close()
+        conn = sqlite3.connect(str(path), timeout=BUSY_SECONDS)
     conn.row_factory = sqlite3.Row
     # Damaged text must not stop the rest of a row from being read.
     conn.text_factory = lambda raw: raw.decode("utf-8", "replace")
-    try:
-        conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
-    except sqlite3.OperationalError:
-        conn.close()
-        conn = sqlite3.connect(str(path), timeout=BUSY_SECONDS)
-        conn.row_factory = sqlite3.Row
-        conn.text_factory = lambda raw: raw.decode("utf-8", "replace")
     return conn
 
 

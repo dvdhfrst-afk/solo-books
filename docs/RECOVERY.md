@@ -37,7 +37,7 @@ cannot be read.
 ## You have a backup
 
 ```bash
-python -m solo_books restore books-backup-2025-12-31-120000.sqlite3
+python -m solo_books restore books-backup-20251231-120000.sqlite3
 ```
 
 The backup is checked first, and a bad one changes nothing. The books as they were are kept beside it, named
