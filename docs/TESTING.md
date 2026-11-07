@@ -35,7 +35,7 @@ the cent.
 python tests/long_session.py --years 6 --rows-per-account-month 230
 ```
 
-On Windows 11 with Python 3.9.25, that run read 83,808 rows and made a 38.8 MB file. It took 112 seconds, ran 4,756
+On Windows 11 with Python 3.9.25, that run read 83,808 rows and made a 38.8 MB file. It took 102 seconds, ran 4,756
 commands in one process, tied 456 statements, compared 162 figures, and every one matched. A smaller run on Linux (3
 years, 11,016 rows) also matched.
 
@@ -72,7 +72,7 @@ not people: no human stranger has tried this.
 ## The review page in a browser
 
 Tested on a built-in Chromium browser against the final code, through real clicks on the page's elements, on invented books
-of about 300 waiting rows: the grouped queue, no rule offered on a group named only `CHECK`, "Choose a category first", booking with one row unticked and a new
+of 238 waiting rows: the grouped queue, no rule offered on a group named only `CHECK`, "Choose a category first", booking with one row unticked and a new
 rule (58 booked, the unticked row stayed), Undo (58 back, rule gone), the business filter, a description of
 `<img src=x onerror=alert(1)>` shown as plain text with no image created, a wrong or missing key refused with status 403,
 and no sideways scrolling at 375 pixels wide. Firefox and Safari have not been tried.
