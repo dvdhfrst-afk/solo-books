@@ -1,0 +1,56 @@
+<section class="panel" aria-labelledby="find-title">
+  <h2 id="find-title">Find rows</h2>
+  <form id="filters" class="fields">
+    <label>Business <select id="f-business"></select></label>
+    <label>Account <select id="f-account"></select></label>
+    <label>Period <input id="f-period" placeholder="2025-03" size="14" autocomplete="off"></label>
+    <label>Category <select id="f-category"></select></label>
+    <label class="wide">Search descriptions, memos and notes <input id="f-search" type="search" autocomplete="off"></label>
+    <label class="check"><input id="f-uncategorized" type="checkbox"> Waiting for review only</label>
+    <label class="check"><input id="f-newest" type="checkbox"> Newest first</label>
+    <button type="submit" class="primary">Find</button>
+  </form>
+  <p class="muted">A period is a year (2025), a quarter (2025-Q2), a month (2025-03) or two dates (2025-01-15..2025-02-20).</p>
+</section>
+<section class="panel" aria-labelledby="rows-title">
+  <h2 id="rows-title">Rows</h2>
+  <p id="summary" class="muted" aria-live="polite"></p>
+  <div id="rows"></div>
+  <div class="pager">
+    <button type="button" id="prev">Previous page</button>
+    <button type="button" id="next">Next page</button>
+  </div>
+</section>
+<section class="panel" aria-labelledby="add-title">
+  <h2 id="add-title">Add a row by hand</h2>
+  <p class="muted">For a row an export missed. Money out is negative. If a later export holds the same date, amount and text, it is not doubled.</p>
+  <form id="add" class="fields">
+    <label>Account <select id="a-account" required></select></label>
+    <label>Date <input id="a-date" type="date" required></label>
+    <label>Amount <input id="a-amount" inputmode="decimal" placeholder="-15.00" size="12" required></label>
+    <label class="wide">Description <input id="a-description" required></label>
+    <label>Category <select id="a-category"></select></label>
+    <label class="wide">Note <input id="a-note"></label>
+    <button type="submit" class="primary">Add the row</button>
+  </form>
+</section>
+<dialog id="detail" aria-labelledby="detail-title">
+  <div class="dialog-head">
+    <h2 id="detail-title">Transaction</h2>
+    <button type="button" id="detail-close">Close</button>
+  </div>
+  <div id="detail-facts"></div>
+  <form id="detail-category" class="fields">
+    <label class="wide">Category <select id="d-category"></select></label>
+    <button type="submit" class="primary">Book it</button>
+    <button type="button" id="d-clear">Send back to review</button>
+  </form>
+  <form id="detail-note" class="fields">
+    <label class="wide">Note <textarea id="d-note"></textarea></label>
+    <button type="submit">Save the note</button>
+  </form>
+  <div class="actions">
+    <button type="button" class="danger" id="d-delete">Delete this row</button>
+    <span id="d-locked" class="muted"></span>
+  </div>
+</dialog>

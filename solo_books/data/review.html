@@ -35,6 +35,16 @@ body {
   color: var(--ink);
   font: 15px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
+nav.pages {
+  display: flex; flex-wrap: wrap; gap: 4px 16px;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+nav.pages a { color: var(--accent); text-decoration: none; padding: 4px 0; }
+nav.pages a[aria-current="page"] { color: var(--ink); font-weight: 600; }
+nav.pages a:hover, nav.pages a:focus-visible { text-decoration: underline; }
 header {
   position: sticky; top: 0; z-index: 2;
   display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline;
@@ -91,6 +101,7 @@ label.rule { display: inline-flex; gap: 6px; align-items: center; font-size: 14p
 </style>
 </head>
 <body>
+__NAV__
 <header>
   <h1>Review queue</h1>
   <span id="count"></span>

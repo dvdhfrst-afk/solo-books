@@ -1,0 +1,17 @@
+<section class="panel" aria-labelledby="list-title">
+  <h2 id="list-title">Bank and card accounts</h2>
+  <p class="muted">Card balances show what is owed. Accounts are added and changed with the command line, such as 'account add'.</p>
+  <div id="list"><p class="muted">Loading...</p></div>
+</section>
+<section class="panel" id="one" aria-labelledby="one-title" hidden>
+  <h2 id="one-title">Account</h2>
+  <div id="one-body"></div>
+</section>
+<section class="panel" aria-labelledby="chart-title">
+  <h2 id="chart-title">Chart of accounts</h2>
+  <form id="chart-form" class="fields">
+    <label>Business <select id="c-business"></select></label>
+    <label class="check"><input type="checkbox" id="c-retired"> Show retired categories</label>
+  </form>
+  <div id="chart"></div>
+</section>

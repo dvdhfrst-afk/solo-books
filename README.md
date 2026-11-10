@@ -165,8 +165,22 @@ Or do the same on a web page, which shows the whole queue grouped by merchant, s
 python -m solo_books web --open
 ```
 
-It listens on 127.0.0.1 only, and Ctrl+C stops it. It has an Undo for the last action. Without `--open` it prints an
-address to open yourself. That address holds a key made new for each run, so use the whole thing.
+It listens on 127.0.0.1 only, and Ctrl+C stops it. The review page has an Undo for the last action. Without `--open`
+it prints the addresses to open yourself. Each holds a key made new for each run, so use the whole thing.
+
+`--open` opens the dashboard: what is waiting, each account's balance and how far it is reconciled. Links across the
+top lead to the other pages, which do what the matching commands do:
+
+- **Transactions**: find rows by account, period, category or text, book them, add notes, add or delete a row.
+- **Accounts**: balances, the column mapping and the reconciliations of each account.
+- **Imports**: upload an export with a dry run first, see past imports, undo one.
+- **Rules**: list, add, test and delete rules, and run them over the queue.
+- **Reconcile**: type a statement's figures, see the difference and what might explain it, finish or reopen a period.
+- **Review**: the queue grouped by merchant, at the same address as before.
+
+The pages use a JSON API under `/api/v1/`, which a script of your own can use too, with the key in a header. Every write
+goes through the same checks as the command line and is refused with the same message. [docs/API.md](docs/API.md)
+lists every endpoint.
 
 ### Reconcile
 
@@ -552,12 +566,12 @@ console redirect may not handle non-English names.
 | `reconcile.py` | Comparing the books with a statement. |
 | `reports.py`, `schedule_c.py` | Profit and loss, balances and the rollup. |
 | `render.py` | Text tables and CSV. |
-| `web/`, `data/review.html` | The local review page: the server, its table of addresses, and the queue's page and JSON. |
+| `web/`, `data/review.html`, `data/web/` | The local web app: the server, its table of addresses, the JSON API (`api*.py`), and the pages. |
 | `money.py`, `periods.py`, `text.py` | Cents, date ranges, description cleanup. |
 
 Each module in `cli/` holds one area of commands, such as `reconciling.py` for `reconcile`, and has a `register`
 function that adds them to the parser. `AREAS` in `cli/__init__.py` lists the areas in the order `--help` shows
-them, and `cli/common.py` holds what they share. In `web/`, each address the page uses is registered in `routes.py` by
+them, and `cli/common.py` holds what they share. In `web/`, each address is registered in `routes.py` by
 the module that answers it, and `server.py` checks every request before it gets there.
 [CONTRIBUTING.md](CONTRIBUTING.md) says how to add a command area or a web address.
 

@@ -11,6 +11,7 @@ from ..money import format_cents
 from ..review import book_rows, group_rows, queue
 from ..rules import delete_rule
 from ..text import names_a_payee
+from .pages import nav_links
 from .routes import get, is_id_list, page, post
 
 PAGE_PATH = Path(__file__).resolve().parent.parent / "data" / "review.html"
@@ -18,7 +19,8 @@ PAGE_PATH = Path(__file__).resolve().parent.parent / "data" / "review.html"
 
 @page("/")
 def review_page(token: str, nonce: str) -> str:
-    return PAGE_PATH.read_text(encoding="utf-8").replace("__TOKEN__", token).replace("__NONCE__", nonce)
+    text = PAGE_PATH.read_text(encoding="utf-8").replace("__TOKEN__", token).replace("__NONCE__", nonce)
+    return text.replace("__NAV__", nav_links(token, "/"))
 
 
 @get("/api/queue")

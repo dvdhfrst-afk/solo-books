@@ -1,0 +1,23 @@
+<section class="panel" aria-labelledby="upload-title">
+  <h2 id="upload-title">Import a file</h2>
+  <p class="muted">A CSV, OFX, QFX or QBO export from your bank or card. First comes a dry run that saves nothing, so you can see how the rows read. Rows already in the books are recognized and left alone.</p>
+  <form id="upload" class="fields">
+    <label>Account <select id="u-account" required></select></label>
+    <label class="wide">File <input id="u-file" type="file" accept=".csv,.ofx,.qfx,.qbo,.txt" required></label>
+    <label class="check"><input id="u-skip-bad" type="checkbox"> Import the readable rows even if some are not</label>
+    <button type="submit" class="primary">Check the file</button>
+  </form>
+</section>
+<section class="panel" id="outcome" aria-labelledby="outcome-title" hidden>
+  <h2 id="outcome-title">What would happen</h2>
+  <div id="outcome-body"></div>
+  <div class="actions">
+    <button type="button" class="primary" id="confirm">Import it</button>
+    <button type="button" id="cancel">Not now</button>
+  </div>
+</section>
+<section class="panel" aria-labelledby="past-title">
+  <h2 id="past-title">Past imports</h2>
+  <p class="muted">Undo takes back only the rows that file put in. A row another imported file also held stays.</p>
+  <div id="past"><p class="muted">Loading...</p></div>
+</section>

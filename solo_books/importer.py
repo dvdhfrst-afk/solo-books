@@ -452,6 +452,16 @@ def list_imports(conn: sqlite3.Connection, account_id: Optional[int] = None) -> 
     return conn.execute(sql + " WHERE i.account_id = ? ORDER BY i.id", (account_id,)).fetchall()
 
 
+def get_import(conn: sqlite3.Connection, import_id: int) -> sqlite3.Row:
+    row = conn.execute(
+        "SELECT i.*, a.name AS account_name FROM imports i JOIN accounts a ON a.id = i.account_id WHERE i.id = ?",
+        (import_id,),
+    ).fetchone()
+    if row is None:
+        raise BooksError(f"no import {import_id}")
+    return row
+
+
 def undo_import(conn: sqlite3.Connection, import_id: int, force: bool = False) -> Dict:
     """Take back what only this file put in the books. A row another live import also held stays."""
     row = conn.execute("SELECT * FROM imports WHERE id = ?", (import_id,)).fetchone()

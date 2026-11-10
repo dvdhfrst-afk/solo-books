@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import books, db, render, review, safety
+from .. import books, db, ledger, render, review, safety
 from .common import EXIT_FINDING, EXIT_OK, add_command, program_name
 
 
@@ -33,16 +33,15 @@ def cmd_status(args, conn) -> int:
     for business in books.list_businesses(conn):
         waiting = len(review.queue(conn, business["id"]))
         for account in books.list_accounts(conn, business["id"]):
-            stats = conn.execute(
-                "SELECT COUNT(*) AS rows_count, MAX(posted_on) AS latest FROM transactions WHERE account_id = ?",
-                (account["id"],),
-            ).fetchone()
-            through = conn.execute(
-                "SELECT MAX(period_end) AS day FROM reconciliations WHERE account_id = ? AND status = 'finished'",
-                (account["id"],),
-            ).fetchone()["day"]
+            summary = ledger.account_summary(conn, account)
             rows.append(
-                [business["name"], account["name"], str(stats["rows_count"]), stats["latest"] or "-", through or "never"]
+                [
+                    business["name"],
+                    account["name"],
+                    str(summary["rows"]),
+                    summary["latest"] or "-",
+                    summary["reconciled_through"] or "never",
+                ]
             )
         print(f"{business['name']}: {waiting} row(s) waiting for review")
     print()

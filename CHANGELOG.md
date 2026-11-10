@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `web` serves a local app: a dashboard and pages for transactions, accounts, imports, rules and reconciling, beside the
+  review page, with links between them. It works with the keyboard and on a phone-width screen.
+- A JSON API under `/api/v1/` for everything those pages do, documented in `docs/API.md`. It needs the run's key in a
+  header, refuses writes from other sites, and gives the command line's own message when it refuses a write.
+
+### Changed
+
+- `web --open` opens the dashboard. The review page keeps its address, and `web` prints both.
+
 ## 1.0.0
 
 First version meant for other people's real books.

@@ -18,13 +18,29 @@ no telemetry and has no dependencies. Nothing here has had an outside security a
 - Regular expressions in rules are length-limited, and nested repeats that could hang are refused.
 - Names cannot escape the folder you chose: `../../x` as a business name becomes `x` in a file name.
 
-**The review page.** `web` listens on 127.0.0.1 only, and that address cannot be changed by a flag.
+**The web pages and the API.** `web` listens on 127.0.0.1 only, and that address cannot be changed by a flag.
 
 - Each run makes a new random key. The page needs it in its address, and every data request needs it in a header, so
   other pages and other programs on your computer cannot read or change your books through it.
 - It checks the `Host` header, which blocks DNS rebinding, and sends a strict Content Security Policy.
 - Descriptions are placed on the page as text, never as HTML.
 - The address printed at startup holds the key. Treat it like a password while the server is running.
+
+The API under `/api/v1/` trusts a request only when all of these hold, and refuses it otherwise:
+
+- The `X-Solo-Books-Token` header holds this run's key, compared in constant time. Reads need it as much as writes do.
+- The `Host` header is `127.0.0.1` or `localhost` at this server's port.
+- A write uses `POST` or `DELETE`. `GET` never changes anything.
+- A write is not marked as coming from another site: an `Origin` header, if sent, must be this server's own address,
+  and a `Sec-Fetch-Site` header, if sent, must be `same-origin` or `none`.
+- A body is `application/json`, or `application/octet-stream` for an uploaded export. A web page cannot send either type
+  to another site without the browser asking that site first, and this server never says yes.
+- A body is at most 8 MB. A larger one is refused before it is read.
+- A query parameter or body field it does not know is refused rather than ignored.
+
+Every write goes through the same functions as the command line, with the same checks. An uploaded file is written to a
+new temporary folder under a cleaned name, which keeps only the last part of the name and replaces anything but
+letters, digits, spaces and `._-()`, and the folder is removed when the import ends. Errors never include a stack trace.
 
 **Your own files.** Reports and backups are written to a temporary file first and moved into place, so a failure leaves
 the old file alone. Nothing writes over a SQLite file, and a backup never overwrites anything. Another program's

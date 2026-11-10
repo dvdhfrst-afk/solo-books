@@ -1,0 +1,25 @@
+<section class="panel" aria-labelledby="run-title">
+  <h2 id="run-title">Tie an account to a statement</h2>
+  <p class="muted">Type the balances as the statement prints them. On a card that is what was owed. Running the same period again replaces its figures until it is finished.</p>
+  <form id="run" class="fields">
+    <label>Account <select id="s-account" required></select></label>
+    <label>From <input id="s-from" type="date" required></label>
+    <label>To <input id="s-to" type="date" required></label>
+    <label>Beginning balance <input id="s-begin" inputmode="decimal" size="12" required></label>
+    <label>Ending balance <input id="s-end" inputmode="decimal" size="12" required></label>
+    <button type="submit" class="primary">Compare</button>
+  </form>
+  <p class="muted">To compare line by line against a statement file, use 'reconcile run' with --statement on the command line.</p>
+</section>
+<section class="panel" id="report" aria-labelledby="report-title" hidden>
+  <h2 id="report-title">Reconciliation</h2>
+  <div id="report-body" aria-live="polite"></div>
+  <div class="actions">
+    <button type="button" class="primary" id="finish">Finish and lock it</button>
+    <button type="button" id="reopen">Reopen it</button>
+  </div>
+</section>
+<section class="panel" aria-labelledby="past-title">
+  <h2 id="past-title">Reconciliations</h2>
+  <div id="past"><p class="muted">Loading...</p></div>
+</section>

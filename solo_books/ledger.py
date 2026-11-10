@@ -270,3 +270,27 @@ def rows_before_opening(conn: sqlite3.Connection, account: sqlite3.Row) -> int:
         "SELECT COUNT(*) FROM transactions WHERE account_id = ? AND posted_on < ?",
         (account["id"], account["opening_date"]),
     ).fetchone()[0]
+
+
+def account_summary(conn: sqlite3.Connection, account: sqlite3.Row) -> dict:
+    """An account's row count, latest row, balance at the end of that day, and how far it is reconciled.
+
+    The balance is None when the account has no opening balance to start from.
+    """
+    stats = conn.execute(
+        "SELECT COUNT(*) AS rows_count, MAX(posted_on) AS latest FROM transactions WHERE account_id = ?", (account["id"],)
+    ).fetchone()
+    through = conn.execute(
+        "SELECT MAX(period_end) AS day FROM reconciliations WHERE account_id = ? AND status = 'finished'", (account["id"],)
+    ).fetchone()["day"]
+    balance = balance_on = None
+    if account["opening_balance_cents"] is not None:
+        balance_on = max(stats["latest"] or account["opening_date"], account["opening_date"])
+        balance = balance_through(conn, account, date.fromisoformat(balance_on))
+    return {
+        "rows": stats["rows_count"],
+        "latest": stats["latest"],
+        "balance_cents": balance,
+        "balance_on": balance_on,
+        "reconciled_through": through,
+    }

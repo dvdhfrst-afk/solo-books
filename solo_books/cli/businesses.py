@@ -168,14 +168,10 @@ def cmd_account_add(args, conn) -> int:
 
 
 def _printed_balance_row(conn, account) -> str:
-    latest = conn.execute(
-        "SELECT MAX(posted_on) AS day FROM transactions WHERE account_id = ?", (account["id"],)
-    ).fetchone()["day"]
-    if account["opening_balance_cents"] is None:
+    summary = ledger.account_summary(conn, account)
+    if summary["balance_cents"] is None:
         return "no opening balance"
-    day = max(latest or account["opening_date"], account["opening_date"])
-    balance = ledger.balance_through(conn, account, parse_iso_date(day))
-    return f"{format_cents(books.book_to_printed(account, balance))} on {day}"
+    return f"{format_cents(books.book_to_printed(account, summary['balance_cents']))} on {summary['balance_on']}"
 
 
 def cmd_account_list(args, conn) -> int:

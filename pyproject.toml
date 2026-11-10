@@ -29,4 +29,4 @@ solo-books = "solo_books.cli:main"
 packages = ["solo_books", "solo_books.cli", "solo_books.web"]
 
 [tool.setuptools.package-data]
-solo_books = ["data/*"]
+solo_books = ["data/*", "data/web/*"]

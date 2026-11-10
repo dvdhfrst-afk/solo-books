@@ -1,0 +1,46 @@
+<form id="pick" class="fields panel">
+  <label>Business <select id="r-business"></select></label>
+</form>
+<section class="panel" aria-labelledby="list-title">
+  <h2 id="list-title">Rules, in the order they are tried</h2>
+  <p class="muted">The lowest priority number goes first, and the first match books the row. Rules never change a row you booked by hand. Deleting a rule leaves the rows it booked as they are.</p>
+  <div id="list"><p class="muted">Loading...</p></div>
+  <form id="apply" class="fields">
+    <label class="check"><input id="p-recheck" type="checkbox"> Also re-run over rows rules booked earlier</label>
+    <button type="submit">Run the rules over the queue</button>
+  </form>
+</section>
+<section class="panel" aria-labelledby="add-title">
+  <h2 id="add-title">Add a rule</h2>
+  <p class="muted">None of the matches care about case. Exact means the whole description, or the merchant name as a test reads it. A short "contains" reaches far: PAYMENT catches every row with that word.</p>
+  <form id="add" class="fields">
+    <label>Match <select id="n-match">
+      <option value="contains">contains</option>
+      <option value="starts">starts with</option>
+      <option value="exact">is exactly</option>
+      <option value="regex">regular expression</option>
+    </select></label>
+    <label class="wide">Pattern <input id="n-pattern" required autocomplete="off"></label>
+    <label>Category <select id="n-category" required></select></label>
+    <label>Priority <input id="n-priority" type="number" value="100" size="6"></label>
+    <label>Direction <select id="n-direction">
+      <option value="">Either way</option>
+      <option value="in">Money in only</option>
+      <option value="out">Money out only</option>
+    </select></label>
+    <label>At least <input id="n-min" inputmode="decimal" size="10" placeholder="0.00"></label>
+    <label>At most <input id="n-max" inputmode="decimal" size="10"></label>
+    <label>Only in account <select id="n-account"></select></label>
+    <button type="submit" class="primary">Add the rule</button>
+  </form>
+</section>
+<section class="panel" aria-labelledby="test-title">
+  <h2 id="test-title">Test a description</h2>
+  <form id="test" class="fields">
+    <label class="wide">Description <input id="t-description" required autocomplete="off" placeholder="LEDGERLY LABS SUBSCRIPTION"></label>
+    <label>Amount <input id="t-amount" inputmode="decimal" size="10" placeholder="-1.00"></label>
+    <label>Account <select id="t-account"></select></label>
+    <button type="submit">Test it</button>
+  </form>
+  <div id="test-result" aria-live="polite"></div>
+</section>
