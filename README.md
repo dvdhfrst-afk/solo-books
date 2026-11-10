@@ -474,6 +474,151 @@ long as its statement period is not finished. `reconcile reopen` unlocks the lat
 `account delete NAME` removes an account with no rows. If it has rows, `--with-rows` takes them with it, unless it has a
 finished reconciliation. `business delete NAME` removes a business that has no accounts left, with its chart and rules.
 
+### History
+
+Every change to the books is written down in the same step as the change itself: when, which command made it (or `web`
+for the review page), what kind of change it was, which rows it touched, and how each row looked before and after.
+
+```bash
+python -m solo_books history list --limit 10
+```
+
+```bash
+python -m solo_books history list --kind categorize --period 2025
+```
+
+```bash
+python -m solo_books history list --row 1
+```
+
+`--kind` takes a kind such as `categorize`, `note` or `chart-rename`, or just its first word, such as `rule` or `tag`.
+`--period` goes by the date of the change, in universal time. `--format csv -o FILE` writes the list to a file, and
+`--all` lists everything rather than the latest 50. `history show ID` gives one change in full, row by row. `txn show ID`
+says how many changes a row has had.
+
+`history revert ID` takes back one change. It works for a booking (`categorize`, including clearing one), a note, a
+category's name or form line, a rule added, and a rule deleted. Taking back an added rule deletes it and sends the rows it
+booked back to the queue. Taking back a deleted rule brings it back with the rows it booked and the rows it was told to
+leave alone. A revert is itself a change in the history. It refuses, and changes nothing, when a row has been changed again
+since: later work is never undone. Other kinds of change are refused with a plain message; fix those with the command
+that made them.
+
+```bash
+python -m solo_books chart rename 6210 "Bank charges" --business "Business A"
+```
+
+```bash
+python -m solo_books history list --kind chart-rename
+```
+
+The first number in that list is the rename, and `history revert` with that number puts the old name back.
+
+### Tags
+
+A tag is a label you put on rows, such as a client or a project. Tags belong to one business. Capitals do not matter, so
+`Harbor Lane` and `harbor lane` are the same tag. A tag name is at most 40 characters, with no tabs or line breaks.
+Rules never set tags; only you do.
+
+```bash
+python -m solo_books txn list --search "HARBOR LANE" --limit 3
+```
+
+```bash
+python -m solo_books tag add "Harbor Lane" 1 10 21
+```
+
+```bash
+python -m solo_books tag list
+```
+
+```bash
+python -m solo_books txn list --tag "harbor lane"
+```
+
+```bash
+python -m solo_books report pnl --period 2025 --business "Business A" --tag "Harbor Lane"
+```
+
+`tag remove TAG IDS` takes it off some rows, `tag rename TAG NEW-NAME` renames it, and `tag delete TAG` takes it off
+every row and forgets it. The rows themselves never change. `txn show ID` lists a row's tags.
+
+### Payees
+
+A payee is whoever a row's money went to or came from, as the bank names them. Each spelling starts as its own payee.
+Give one a plain name, merge spellings that are the same payee, and flag the ones that are contractors. The rows keep
+the names the bank gave them. Payees belong to one business, and the directory keeps no tax ID numbers or addresses.
+
+```bash
+python -m solo_books payee list --business "Business A" --year 2025
+```
+
+```bash
+python -m solo_books payee rename "PIXEL FOUNDRY CONTRACTOR" "Pixel Foundry" --business "Business A"
+```
+
+```bash
+python -m solo_books payee set "Pixel Foundry" --contractor yes --business "Business A"
+```
+
+```bash
+python -m solo_books payee show "Pixel Foundry" --business "Business A"
+```
+
+`payee merge NAME INTO-NAME` makes the first payee another spelling of the second, and a contractor flag on the first
+carries over. `payee unmerge NAME` takes a spelling back out, with the flag as it was before the merge. Both are in the
+history.
+
+```bash
+python -m solo_books report payees --year 2025 --business "Business A" --limit 5
+```
+
+```bash
+python -m solo_books report contractors --year 2025 --business "Business A"
+```
+
+`report payees` ranks payees by money out and money in, from every account. Transfers and owner money are not payments
+to anyone and are left out. `report contractors` lists the payees flagged as contractors with what each was paid, less
+refunds, divided at `--threshold` (600.00 unless you give another). It is a bookkeeping list to hand your preparer, not a
+decision about who needs any form. Rows still in the queue are left out of both and counted. `report preparer` adds the
+contractors list to its folder when any payee is flagged.
+
+### Budgets
+
+A budget is a plan per category per year, entered as a positive amount for income and spending alike. Give a monthly
+amount, which is the same every month, or a yearly one, which is spread evenly over the months to the cent. `--month N`
+with `--monthly` sets one month.
+
+```bash
+python -m solo_books budget set --business "Business A" --category Meals --year 2025 --monthly 75.00
+```
+
+```bash
+python -m solo_books budget set --business "Business A" --category Sales --year 2025 --yearly 96000.00
+```
+
+```bash
+python -m solo_books budget list
+```
+
+```bash
+python -m solo_books report budget --business "Business A" --period 2025
+```
+
+```bash
+python -m solo_books report budget --business "Business A" --period 2025-Q2
+```
+
+The report shows each category's budget, what the books hold, the difference (actual minus budget) and the percent
+used, in the same sections and signs as profit and loss. The period can be a year, a quarter, a month, or a range of
+whole months. Rows still in the queue are left out and counted.
+
+```bash
+python -m solo_books budget copy --from 2025 --to 2026
+```
+
+`budget copy` refuses when the new year already has budgets, unless you add `--replace`. `budget delete --business B
+--category C --year Y` removes one category's budget for a year.
+
 ## Keeping your books safe
 
 ```bash
@@ -564,6 +709,8 @@ console redirect may not handle non-English names.
 | `rules.py`, `review.py` | Categorization and the queue. |
 | `ledger.py` | Finding, adding, deleting and booking rows. |
 | `reconcile.py` | Comparing the books with a statement. |
+| `history.py` | The record of every change, and taking some back. |
+| `tags.py`, `payees.py`, `budgets.py` | Tags on rows, the payee directory and its reports, budgets and their report. |
 | `reports.py`, `schedule_c.py` | Profit and loss, balances and the rollup. |
 | `render.py` | Text tables and CSV. |
 | `web/`, `data/review.html`, `data/web/` | The local web app: the server, its table of addresses, the JSON API (`api*.py`), and the pages. |

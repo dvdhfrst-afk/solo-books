@@ -32,7 +32,9 @@ python -m solo_books check
 
 `check` looks at the file's structure with SQLite's own integrity check, then at the bookkeeping: links between rows, a
 category from another business, dates that are not dates, rows changed behind the program's back, and mappings that
-cannot be read.
+cannot be read. It also checks the history (a change of a kind this program does not know, details that cannot be
+read, a change taken back by one that is not there), tags on another business's rows, payee merges that go round in a
+circle, and budgets for categories that never reach profit and loss.
 
 ## You have a backup
 
@@ -54,7 +56,8 @@ python -m solo_books salvage saved.sqlite3
 ```
 
 This reads the damaged books without changing them and copies every row it can read into a new file. It reports what
-it could not read. If a row's category or rule was lost, the row keeps its money and goes back to the queue.
+it could not read. If a row's category or rule was lost, the row keeps its money and goes back to the queue. The
+history, tags, payees and budgets come across too, as far as they can be read.
 
 Then work in the new file:
 

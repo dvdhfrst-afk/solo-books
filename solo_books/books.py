@@ -7,6 +7,7 @@ from datetime import date
 from pathlib import Path
 from typing import List, Optional
 
+from . import history
 from .db import transaction
 from .errors import BooksError
 from .schedule_c import latest_form, load_form
@@ -44,6 +45,10 @@ def add_business(conn: sqlite3.Connection, name: str, activity: str = "") -> sql
                 "INSERT INTO categories (business_id, code, name, kind, schedule_c_key) VALUES (?, ?, ?, ?, ?)",
                 (business_id, entry["code"], entry["name"], entry["kind"], entry.get("schedule_c_key")),
             )
+        history.record(
+            conn, "business-add", f"Added business {name}.", business_id,
+            {"name": name, "activity": activity, "categories": len(chart["categories"])},
+        )
     return get_business(conn, name)
 
 
@@ -86,19 +91,20 @@ def add_account(
         raise BooksError("give the opening balance and the opening date together")
     if conn.execute("SELECT 1 FROM accounts WHERE name = ?", (name,)).fetchone():
         raise BooksError(f"there is already an account named {name!r}")
-    conn.execute(
-        "INSERT INTO accounts (business_id, name, kind, institution, opening_balance_cents, opening_date, mapping_json)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (
-            business["id"],
-            name,
-            kind,
-            institution,
-            opening_balance_cents,
-            opening_date.isoformat() if opening_date else None,
-            mapping_json,
-        ),
-    )
+    opened = opening_date.isoformat() if opening_date else None
+    with transaction(conn):
+        cursor = conn.execute(
+            "INSERT INTO accounts (business_id, name, kind, institution, opening_balance_cents, opening_date, mapping_json)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (business["id"], name, kind, institution, opening_balance_cents, opened, mapping_json),
+        )
+        history.record(
+            conn, "account-add", f"Added account {name} ({kind}) to {business['name']}.", business["id"],
+            {
+                "account_id": cursor.lastrowid, "name": name, "kind": kind, "institution": institution,
+                "opening_balance_cents": opening_balance_cents, "opening_date": opened, "mapping": mapping_json,
+            },
+        )
     return get_account(conn, name)
 
 
@@ -128,7 +134,12 @@ def rename_business(conn: sqlite3.Connection, business: sqlite3.Row, new_name: s
     clash = conn.execute("SELECT 1 FROM businesses WHERE name = ? AND id != ?", (new_name, business["id"])).fetchone()
     if clash:
         raise BooksError(f"there is already a business named {new_name!r}")
-    conn.execute("UPDATE businesses SET name = ? WHERE id = ?", (new_name, business["id"]))
+    with transaction(conn):
+        conn.execute("UPDATE businesses SET name = ? WHERE id = ?", (new_name, business["id"]))
+        history.record(
+            conn, "business-rename", f"Renamed business {business['name']} to {new_name}.", business["id"],
+            {"before": business["name"], "after": new_name},
+        )
     return new_name
 
 
@@ -139,8 +150,12 @@ def delete_business(conn: sqlite3.Connection, business: sqlite3.Row) -> None:
         names = ", ".join(account["name"] for account in accounts)
         raise BooksError(f"{business['name']} still has accounts: {names}. Delete those first.")
     with transaction(conn):
-        conn.execute("DELETE FROM rules WHERE business_id = ?", (business["id"],))
+        rules = conn.execute("DELETE FROM rules WHERE business_id = ?", (business["id"],)).rowcount
         conn.execute("DELETE FROM businesses WHERE id = ?", (business["id"],))
+        history.record(
+            conn, "business-delete", f"Deleted business {business['name']}, its chart and its {rules} rule(s).",
+            business["id"], {"name": business["name"], "activity": business["activity"], "rules": rules},
+        )
 
 
 def rename_account(conn: sqlite3.Connection, account: sqlite3.Row, new_name: str) -> str:
@@ -148,7 +163,12 @@ def rename_account(conn: sqlite3.Connection, account: sqlite3.Row, new_name: str
     clash = conn.execute("SELECT 1 FROM accounts WHERE name = ? AND id != ?", (new_name, account["id"])).fetchone()
     if clash:
         raise BooksError(f"there is already an account named {new_name!r}")
-    conn.execute("UPDATE accounts SET name = ? WHERE id = ?", (new_name, account["id"]))
+    with transaction(conn):
+        conn.execute("UPDATE accounts SET name = ? WHERE id = ?", (new_name, account["id"]))
+        history.record(
+            conn, "account-rename", f"Renamed account {account['name']} to {new_name}.", account["business_id"],
+            {"account_id": account["id"], "before": account["name"], "after": new_name},
+        )
     return new_name
 
 
@@ -165,19 +185,46 @@ def delete_account(conn: sqlite3.Connection, account: sqlite3.Row, with_rows: bo
     ).fetchone()[0]
     if finished:
         raise BooksError(f"{account['name']} has {finished} finished reconciliation(s). Reopen them first.")
-    conn.execute("DELETE FROM accounts WHERE id = ?", (account["id"],))
+    with transaction(conn):
+        gone = [
+            (row["id"], history.snapshot(row), None)
+            for row in conn.execute(
+                "SELECT t.*, ? AS account_name, c.code AS category_code, c.name AS category_name FROM transactions t"
+                " LEFT JOIN categories c ON c.id = t.category_id WHERE t.account_id = ? ORDER BY t.id",
+                (account["name"], account["id"]),
+            )
+        ]
+        conn.execute("DELETE FROM accounts WHERE id = ?", (account["id"],))
+        history.record(
+            conn, "account-delete", f"Deleted account {account['name']} and its {count} row(s).", account["business_id"],
+            {"account_id": account["id"], "name": account["name"], "kind": account["kind"], "rows": count}, gone,
+        )
     return count
 
 
 def set_account_mapping(conn: sqlite3.Connection, account: sqlite3.Row, mapping_json: str) -> None:
-    conn.execute("UPDATE accounts SET mapping_json = ? WHERE id = ?", (mapping_json, account["id"]))
+    with transaction(conn):
+        conn.execute("UPDATE accounts SET mapping_json = ? WHERE id = ?", (mapping_json, account["id"]))
+        history.record(
+            conn, "account-map", f"Set the column mapping of {account['name']}.", account["business_id"],
+            {"account_id": account["id"], "account": account["name"], "before": account["mapping_json"], "after": mapping_json},
+        )
 
 
 def set_opening_balance(conn: sqlite3.Connection, account: sqlite3.Row, cents: int, on: date) -> None:
-    conn.execute(
-        "UPDATE accounts SET opening_balance_cents = ?, opening_date = ? WHERE id = ?",
-        (cents, on.isoformat(), account["id"]),
-    )
+    with transaction(conn):
+        conn.execute(
+            "UPDATE accounts SET opening_balance_cents = ?, opening_date = ? WHERE id = ?",
+            (cents, on.isoformat(), account["id"]),
+        )
+        history.record(
+            conn, "account-opening", f"Set the opening balance of {account['name']}.", account["business_id"],
+            {
+                "account_id": account["id"], "account": account["name"],
+                "before": {"cents": account["opening_balance_cents"], "date": account["opening_date"]},
+                "after": {"cents": cents, "date": on.isoformat()},
+            },
+        )
 
 
 def printed_to_book(account: sqlite3.Row, printed_cents: int) -> int:
@@ -268,22 +315,32 @@ def add_category(
             raise BooksError(f"code {code} is already {row['name']}")
         if row["name"].lower() == name.lower():
             raise BooksError(f"name {name!r} is already code {row['code']}")
-    conn.execute(
-        "INSERT INTO categories (business_id, code, name, kind, schedule_c_key) VALUES (?, ?, ?, ?, ?)",
-        (business_id, code, name, kind, key),
-    )
+    with transaction(conn):
+        cursor = conn.execute(
+            "INSERT INTO categories (business_id, code, name, kind, schedule_c_key) VALUES (?, ?, ?, ?, ?)",
+            (business_id, code, name, kind, key),
+        )
+        history.record(
+            conn, "chart-add", f"Added category {code} {name} ({kind}).", business_id,
+            {"category_id": cursor.lastrowid, "code": code, "name": name, "kind": kind, "line_key": key},
+        )
     return find_category(conn, business_id, code)
 
 
 def map_category(conn: sqlite3.Connection, category: sqlite3.Row, line: Optional[str], year: Optional[int] = None) -> None:
     """Point a category at a form line, or take it off the form with line=None."""
-    if line is None:
-        conn.execute("UPDATE categories SET schedule_c_key = NULL WHERE id = ?", (category["id"],))
-        return
-    if category["kind"] in OFF_FORM_KINDS:
-        raise BooksError(f"{category['kind']} categories stay off the form")
-    key = resolve_line_key(line, category["kind"], year)
-    conn.execute("UPDATE categories SET schedule_c_key = ? WHERE id = ?", (key, category["id"]))
+    key = None
+    if line is not None:
+        if category["kind"] in OFF_FORM_KINDS:
+            raise BooksError(f"{category['kind']} categories stay off the form")
+        key = resolve_line_key(line, category["kind"], year)
+    with transaction(conn):
+        conn.execute("UPDATE categories SET schedule_c_key = ? WHERE id = ?", (key, category["id"]))
+        where = f"line {line}" if line is not None else "no line"
+        history.record(
+            conn, "chart-map", f"Pointed category {category['code']} {category['name']} at {where}.", category["business_id"],
+            {"category_id": category["id"], "code": category["code"], "before": category["schedule_c_key"], "after": key},
+        )
 
 
 def rename_category(conn: sqlite3.Connection, category: sqlite3.Row, new_name: str) -> None:
@@ -294,7 +351,13 @@ def rename_category(conn: sqlite3.Connection, category: sqlite3.Row, new_name: s
     ).fetchone()
     if clash:
         raise BooksError(f"name {new_name!r} is already code {clash['code']}")
-    conn.execute("UPDATE categories SET name = ? WHERE id = ?", (new_name, category["id"]))
+    with transaction(conn):
+        conn.execute("UPDATE categories SET name = ? WHERE id = ?", (new_name, category["id"]))
+        history.record(
+            conn, "chart-rename", f"Renamed category {category['code']} from {category['name']} to {new_name}.",
+            category["business_id"],
+            {"category_id": category["id"], "code": category["code"], "before": category["name"], "after": new_name},
+        )
 
 
 def retire_category(conn: sqlite3.Connection, category: sqlite3.Row) -> None:
@@ -302,16 +365,31 @@ def retire_category(conn: sqlite3.Connection, category: sqlite3.Row) -> None:
     in_rules = conn.execute("SELECT COUNT(*) FROM rules WHERE category_id = ?", (category["id"],)).fetchone()[0]
     if in_rules:
         raise BooksError(f"{in_rules} rule(s) still book to this category; change or delete them first")
-    conn.execute("UPDATE categories SET active = 0 WHERE id = ?", (category["id"],))
+    with transaction(conn):
+        conn.execute("UPDATE categories SET active = 0 WHERE id = ?", (category["id"],))
+        history.record(
+            conn, "chart-retire", f"Retired category {category['code']} {category['name']}.", category["business_id"],
+            {"category_id": category["id"], "code": category["code"], "name": category["name"]},
+        )
 
 
 def set_inventory(conn: sqlite3.Connection, business_id: int, year: int, beginning: int, ending: int) -> None:
-    conn.execute(
-        "INSERT INTO inventory_counts (business_id, tax_year, beginning_cents, ending_cents) VALUES (?, ?, ?, ?)"
-        " ON CONFLICT (business_id, tax_year) DO UPDATE SET"
-        " beginning_cents = excluded.beginning_cents, ending_cents = excluded.ending_cents",
-        (business_id, year, beginning, ending),
-    )
+    earlier = get_inventory(conn, business_id, year)
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO inventory_counts (business_id, tax_year, beginning_cents, ending_cents) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT (business_id, tax_year) DO UPDATE SET"
+            " beginning_cents = excluded.beginning_cents, ending_cents = excluded.ending_cents",
+            (business_id, year, beginning, ending),
+        )
+        history.record(
+            conn, "inventory-set", f"Saved inventory counts for {year}.", business_id,
+            {
+                "year": year,
+                "before": {"beginning_cents": earlier["beginning_cents"], "ending_cents": earlier["ending_cents"]} if earlier else None,
+                "after": {"beginning_cents": beginning, "ending_cents": ending},
+            },
+        )
 
 
 def list_inventory(conn: sqlite3.Connection, business_id: Optional[int] = None) -> List[sqlite3.Row]:

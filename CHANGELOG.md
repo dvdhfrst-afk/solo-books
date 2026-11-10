@@ -8,10 +8,24 @@
   review page, with links between them. It works with the keyboard and on a phone-width screen.
 - A JSON API under `/api/v1/` for everything those pages do, documented in `docs/API.md`. It needs the run's key in a
   header, refuses writes from other sites, and gives the command line's own message when it refuses a write.
+- A history of every change to the books, written in the same step as the change: when, which command (or the review
+  page), the kind of change, and each row before and after. `history list`, `history show` and `history revert`, which
+  takes back a booking, a note, a category's name or form line, an added rule or a deleted rule, and refuses when a row
+  was changed again since.
+- Tags on rows: `tag add`, `tag remove`, `tag list`, `tag rename` and `tag delete`, with `txn list --tag`,
+  `report pnl --tag`, and a row's tags in `txn show`.
+- A payee directory: `payee list`, `payee show`, `payee rename`, `payee merge`, `payee unmerge` and `payee set
+  --contractor`, with `report payees` and `report contractors`. `report preparer` adds the contractors list when any
+  payee is flagged.
+- Budgets per category per year: `budget set`, `budget list`, `budget delete` and `budget copy`, with `report budget`
+  for a year, quarter, month or run of whole months.
 
 ### Changed
 
 - `web --open` opens the dashboard. The review page keeps its address, and `web` prints both.
+- The books gain tables for the history, tags, payees and budgets. Older files are upgraded on first use, with a copy
+  kept beside them.
+- `check` looks at the history, tags, payees and budgets too, and `salvage` copies them.
 
 ## 1.0.0
 

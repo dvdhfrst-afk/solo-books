@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from .. import books, db, render
+from .. import books, db, history, render
 from ..errors import BooksError
 from ..periods import FIRST_YEAR, LAST_YEAR, check_year
 from ..text import printable
@@ -131,14 +131,24 @@ class PrintableOnly:
         return getattr(self._stream, name)
 
 
+def command_label(args) -> str:
+    """The command as the history names it, such as 'txn note' or 'web'."""
+    action = getattr(args, f"{args.command}_command", None)
+    return f"{args.command} {action}" if action else args.command
+
+
 def _run(args) -> int:
-    if not args.needs_conn:
-        return args.handler(args)
-    conn = db.connect(db.resolve_db_path(args.db))
+    history.set_source(command_label(args))
     try:
-        return args.handler(args, conn)
+        if not args.needs_conn:
+            return args.handler(args)
+        conn = db.connect(db.resolve_db_path(args.db))
+        try:
+            return args.handler(args, conn)
+        finally:
+            conn.close()
     finally:
-        conn.close()
+        history.set_source("")
 
 
 def guarded(args) -> int:

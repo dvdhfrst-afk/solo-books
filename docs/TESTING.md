@@ -10,12 +10,12 @@ its accounting or its security. Weigh it accordingly: keep backups, and tie your
 python -m unittest discover
 ```
 
-The suite has 406 tests and needs no network. Results:
+The suite has 489 tests and needs no network. Results:
 
 | System | Python | Result |
 |---|---|---|
-| Windows 11 | 3.9.25 | All pass, 1 skipped (owner-only file modes do not exist on Windows). About 60 seconds. |
-| Linux in a container (`python:3.9-slim`), as an ordinary user | 3.9.25 | All pass, none skipped. About 45 seconds. |
+| Windows 11 | 3.9.25 | All pass, 1 skipped (owner-only file modes do not exist on Windows). About 110 seconds. |
+| Linux in a container (`python:3.9-slim`), as an ordinary user | 3.9.25 | All pass, none skipped. About 45 seconds. This run was of the 406 tests before the history, tags, payees and budgets. |
 
 No other Python version has been run, and macOS has not been run. The code uses nothing specific to any of them, and
 the syntax is checked against 3.9, but that is reasoning rather than a test.
