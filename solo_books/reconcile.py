@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from . import history
 from .books import book_to_printed, printed_to_book
 from .csvmap import ParsedRow
 from .db import transaction
@@ -101,17 +102,30 @@ def run(
             f"({overlap['period_start']} to {overlap['period_end']}). Reopen it to change it."
         )
     begin, ending = printed_to_book(account, printed_begin), printed_to_book(account, printed_end)
-    conn.execute(
-        "INSERT INTO reconciliations (account_id, period_start, period_end, statement_begin_cents, statement_end_cents)"
-        " VALUES (?, ?, ?, ?, ?)"
-        " ON CONFLICT (account_id, period_start, period_end) DO UPDATE SET"
-        " statement_begin_cents = excluded.statement_begin_cents, statement_end_cents = excluded.statement_end_cents",
-        (account["id"], start.isoformat(), end.isoformat(), begin, ending),
-    )
-    recon = conn.execute(
-        "SELECT * FROM reconciliations WHERE account_id = ? AND period_start = ? AND period_end = ?",
-        (account["id"], start.isoformat(), end.isoformat()),
-    ).fetchone()
+    find = "SELECT * FROM reconciliations WHERE account_id = ? AND period_start = ? AND period_end = ?"
+    key = (account["id"], start.isoformat(), end.isoformat())
+    earlier = conn.execute(find, key).fetchone()
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO reconciliations (account_id, period_start, period_end, statement_begin_cents, statement_end_cents)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT (account_id, period_start, period_end) DO UPDATE SET"
+            " statement_begin_cents = excluded.statement_begin_cents, statement_end_cents = excluded.statement_end_cents",
+            (*key, begin, ending),
+        )
+        recon = conn.execute(find, key).fetchone()
+        unchanged = earlier is not None and (earlier["statement_begin_cents"], earlier["statement_end_cents"]) == (begin, ending)
+        if not unchanged:
+            history.record(
+                conn, "reconcile-run",
+                f"Recorded statement figures for {account['name']}, {start} to {end} (reconciliation {recon['id']}).",
+                account["business_id"],
+                {
+                    "reconciliation_id": recon["id"], "account": account["name"], "from": start.isoformat(), "to": end.isoformat(),
+                    "before": {"begin_cents": earlier["statement_begin_cents"], "end_cents": earlier["statement_end_cents"]} if earlier else None,
+                    "after": {"begin_cents": begin, "end_cents": ending},
+                },
+            )
     return compute(conn, recon, statement_file, skip_bad)
 
 
@@ -307,11 +321,30 @@ def finish(conn: sqlite3.Connection, reconciliation_id: int) -> ReconcileReport:
             "UPDATE reconciliations SET status = 'finished', finished_at = datetime('now') WHERE id = ?",
             (reconciliation_id,),
         )
+        span = (recon["account_id"], period.start.isoformat(), period.end.isoformat())
+        locked = conn.execute(
+            "SELECT id, reconciliation_id FROM transactions WHERE account_id = ? AND posted_on BETWEEN ? AND ? ORDER BY id", span
+        ).fetchall()
         conn.execute(
             "UPDATE transactions SET reconciliation_id = ? WHERE account_id = ? AND posted_on BETWEEN ? AND ?",
-            (reconciliation_id, recon["account_id"], period.start.isoformat(), period.end.isoformat()),
+            (reconciliation_id, *span),
         )
+        _record_lock(conn, "reconcile-finish", report.account, recon, f"Finished reconciliation {reconciliation_id}", [
+            (row["id"], {"reconciliation_id": row["reconciliation_id"]}, {"reconciliation_id": reconciliation_id}) for row in locked
+        ])
     return compute(conn, _get(conn, reconciliation_id))
+
+
+def _record_lock(conn: sqlite3.Connection, kind: str, account: sqlite3.Row, recon: sqlite3.Row, what: str, rows: list) -> None:
+    history.record(
+        conn, kind, f"{what}: {account['name']}, {recon['period_start']} to {recon['period_end']}, {len(rows)} row(s).",
+        account["business_id"],
+        {
+            "reconciliation_id": recon["id"], "account": account["name"], "from": recon["period_start"],
+            "to": recon["period_end"], "begin_cents": recon["statement_begin_cents"], "end_cents": recon["statement_end_cents"],
+        },
+        rows,
+    )
 
 
 def reopen(conn: sqlite3.Connection, reconciliation_id: int) -> None:
@@ -330,7 +363,13 @@ def reopen(conn: sqlite3.Connection, reconciliation_id: int) -> None:
         conn.execute(
             "UPDATE reconciliations SET status = 'open', finished_at = NULL WHERE id = ?", (reconciliation_id,)
         )
+        unlocked = conn.execute(
+            "SELECT id FROM transactions WHERE reconciliation_id = ? ORDER BY id", (reconciliation_id,)
+        ).fetchall()
         conn.execute("UPDATE transactions SET reconciliation_id = NULL WHERE reconciliation_id = ?", (reconciliation_id,))
+        _record_lock(conn, "reconcile-reopen", _account_of(conn, recon), recon, f"Reopened reconciliation {reconciliation_id}", [
+            (row["id"], {"reconciliation_id": reconciliation_id}, {"reconciliation_id": None}) for row in unlocked
+        ])
 
 
 def forget(conn: sqlite3.Connection, reconciliation_id: int) -> None:
@@ -338,7 +377,9 @@ def forget(conn: sqlite3.Connection, reconciliation_id: int) -> None:
     recon = _get(conn, reconciliation_id)
     if recon["status"] != "open":
         raise BooksError(f"reconciliation {reconciliation_id} is finished; reopen it first")
-    conn.execute("DELETE FROM reconciliations WHERE id = ?", (reconciliation_id,))
+    with transaction(conn):
+        conn.execute("DELETE FROM reconciliations WHERE id = ?", (reconciliation_id,))
+        _record_lock(conn, "reconcile-forget", _account_of(conn, recon), recon, f"Removed reconciliation {reconciliation_id}", [])
 
 
 def get(conn: sqlite3.Connection, reconciliation_id: int) -> sqlite3.Row:

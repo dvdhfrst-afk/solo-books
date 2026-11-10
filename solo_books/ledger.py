@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import date
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Sequence
 
+from . import history
 from .books import require_usable
 from .db import transaction
 from .errors import BooksError
@@ -78,8 +79,15 @@ def find_transactions(
     uncategorized: bool = False,
     search: Optional[str] = None,
     limit: Optional[int] = None,
+    tag_ids: Optional[Sequence[int]] = None,
 ) -> List[sqlite3.Row]:
     where, params = [], []  # type: ignore[var-annotated]
+    if tag_ids is not None:
+        where.append(
+            f"EXISTS (SELECT 1 FROM transaction_tags g WHERE g.transaction_id = t.id"
+            f" AND g.tag_id IN ({', '.join('?' * len(tag_ids)) or 'NULL'}))"
+        )
+        params.extend(tag_ids)
     if business_id is not None:
         where.append("a.business_id = ?")
         params.append(business_id)
@@ -144,6 +152,11 @@ def add_manual(
                 clean_cell(note),
             ),
         )
+        added = get_transaction(conn, cursor.lastrowid)
+        history.record(
+            conn, "txn-add", f"Added transaction {added['id']} to {account['name']} by hand.", account["business_id"],
+            {"account": account["name"]}, [(added["id"], None, history.snapshot(added))],
+        )
     return cursor.lastrowid
 
 
@@ -192,6 +205,10 @@ def edit_manual(
             " dedupe_key = ?, natural_key = ?, occurrence = ? WHERE id = ?",
             (day.isoformat(), amount, text, merchant_key(text), key, natural, taken + 1, transaction_id),
         )
+        history.record(
+            conn, "txn-edit", f"Corrected transaction {transaction_id}.", row["business_id"], {},
+            [(transaction_id, history.snapshot(row), history.snapshot(get_transaction(conn, transaction_id)))],
+        )
 
 
 def delete_transaction(conn: sqlite3.Connection, transaction_id: int) -> None:
@@ -209,6 +226,10 @@ def delete_transaction(conn: sqlite3.Connection, transaction_id: int) -> None:
                 "INSERT OR IGNORE INTO deleted_rows (account_id, dedupe_key, natural_key, occurrence) VALUES (?, ?, ?, ?)",
                 (row["account_id"], row["dedupe_key"], row["natural_key"], row["occurrence"]),
             )
+        history.record(
+            conn, "txn-delete", f"Deleted transaction {transaction_id}.", row["business_id"],
+            {"remembered": row["import_id"] is not None}, [(transaction_id, history.snapshot(row), None)],
+        )
 
 
 def _check_category(business_id: int, category: sqlite3.Row) -> None:
@@ -219,7 +240,9 @@ def _check_category(business_id: int, category: sqlite3.Row) -> None:
 
 def categorize(conn: sqlite3.Connection, transaction_ids: Iterable[int], category: sqlite3.Row) -> int:
     """Book rows to a category by hand. Rules will not change them afterward."""
-    count = 0
+    label = f"{category['code']} {category['name']}"
+    after = history.booking(category["id"], label, "manual", None)
+    changes = []
     with transaction(conn):
         for transaction_id in transaction_ids:
             row = get_transaction(conn, transaction_id)
@@ -228,27 +251,45 @@ def categorize(conn: sqlite3.Connection, transaction_ids: Iterable[int], categor
                 "UPDATE transactions SET category_id = ?, category_source = 'manual', rule_id = NULL WHERE id = ?",
                 (category["id"], transaction_id),
             )
-            count += 1
-    return count
+            changes.append((transaction_id, history.booking_of(row), after))
+        if changes:
+            history.record(
+                conn, "categorize", f"Booked {len(changes)} row(s) to {label} by hand.", category["business_id"],
+                {"category": label}, changes,
+            )
+    return len(changes)
 
 
 def uncategorize(conn: sqlite3.Connection, transaction_ids: Iterable[int]) -> int:
     """Send rows back to the review queue."""
-    count = 0
+    changes = []
+    business_id = None
     with transaction(conn):
         for transaction_id in transaction_ids:
-            get_transaction(conn, transaction_id)
+            row = get_transaction(conn, transaction_id)
+            business_id = row["business_id"]
             conn.execute(
                 "UPDATE transactions SET category_id = NULL, category_source = NULL, rule_id = NULL WHERE id = ?",
                 (transaction_id,),
             )
-            count += 1
-    return count
+            changes.append((transaction_id, history.booking_of(row), history.booking(None, None, None, None)))
+        if changes:
+            history.record(
+                conn, "categorize", f"Sent {len(changes)} row(s) back to the review queue.", business_id,
+                {"category": None}, changes,
+            )
+    return len(changes)
 
 
 def set_note(conn: sqlite3.Connection, transaction_id: int, note: str) -> None:
-    get_transaction(conn, transaction_id)
-    conn.execute("UPDATE transactions SET note = ? WHERE id = ?", (clean_cell(note), transaction_id))
+    row = get_transaction(conn, transaction_id)
+    note = clean_cell(note)
+    with transaction(conn):
+        conn.execute("UPDATE transactions SET note = ? WHERE id = ?", (note, transaction_id))
+        history.record(
+            conn, "note", f"Changed the note on transaction {transaction_id}.", row["business_id"], {},
+            [(transaction_id, {"note": row["note"]}, {"note": note})],
+        )
 
 
 def balance_through(conn: sqlite3.Connection, account: sqlite3.Row, through: date) -> Optional[int]:

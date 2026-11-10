@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Container, Dict, Iterable, List, Optional, Pattern
 
+from . import history
 from .books import find_category, get_account, require_usable
 from .csvmap import read_rows, read_text
 from .db import transaction
@@ -124,7 +125,9 @@ def add_rule(
     direction: Optional[str] = None,
     min_cents: Optional[int] = None,
     max_cents: Optional[int] = None,
+    record: bool = True,
 ) -> int:
+    """Add one rule. 'rules import' passes record=False and keeps one history entry for the whole file."""
     if match_type not in MATCH_TYPES:
         raise BooksError(f"match type must be one of: {', '.join(MATCH_TYPES)}")
     pattern = clean_cell(pattern)
@@ -141,20 +144,36 @@ def add_rule(
     if category["business_id"] != business_id:
         raise BooksError("the rule's category belongs to another business")
     require_usable(category)
-    cursor = conn.execute(
-        "INSERT INTO rules (business_id, account_id, priority, match_type, pattern, direction,"
-        " min_cents, max_cents, category_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (business_id, account_id, priority, match_type, pattern, direction, min_cents, max_cents, category["id"]),
-    )
+    with transaction(conn):
+        cursor = conn.execute(
+            "INSERT INTO rules (business_id, account_id, priority, match_type, pattern, direction,"
+            " min_cents, max_cents, category_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (business_id, account_id, priority, match_type, pattern, direction, min_cents, max_cents, category["id"]),
+        )
+        if record:
+            rule = conn.execute("SELECT * FROM rules WHERE id = ?", (cursor.lastrowid,)).fetchone()
+            history.record(
+                conn, "rule-add", f"Added rule {rule['id']}: {match_type} {pattern!r} -> {category['code']} {category['name']}.",
+                business_id, history.rule_detail(conn, rule),
+            )
     return cursor.lastrowid
 
 
 def hold_back(conn: sqlite3.Connection, rule_id: int, transaction_ids: Iterable[int]) -> None:
     """This rule never books these rows. A person can still book them by hand."""
-    conn.executemany(
-        "INSERT OR IGNORE INTO rule_exceptions (rule_id, transaction_id) VALUES (?, ?)",
-        [(rule_id, transaction_id) for transaction_id in transaction_ids],
-    )
+    ids = list(transaction_ids)
+    if not ids:
+        return
+    with transaction(conn):
+        conn.executemany(
+            "INSERT OR IGNORE INTO rule_exceptions (rule_id, transaction_id) VALUES (?, ?)",
+            [(rule_id, transaction_id) for transaction_id in ids],
+        )
+        business_id = conn.execute("SELECT business_id FROM rules WHERE id = ?", (rule_id,)).fetchone()[0]
+        history.record(
+            conn, "rule-hold-back", f"Held {len(ids)} row(s) back from rule {rule_id}.", business_id, {"rule_id": rule_id},
+            [(transaction_id, None, {"held_back_from_rule": rule_id}) for transaction_id in ids],
+        )
 
 
 def list_rules(conn: sqlite3.Connection, business_id: int) -> List[sqlite3.Row]:
@@ -170,9 +189,23 @@ def list_rules(conn: sqlite3.Connection, business_id: int) -> List[sqlite3.Row]:
 
 def delete_rule(conn: sqlite3.Connection, rule_id: int) -> None:
     """Rows the rule already booked keep their category."""
-    cursor = conn.execute("DELETE FROM rules WHERE id = ?", (rule_id,))
-    if cursor.rowcount == 0:
+    rule = conn.execute("SELECT * FROM rules WHERE id = ?", (rule_id,)).fetchone()
+    if rule is None:
         raise BooksError(f"no rule {rule_id}")
+    with transaction(conn):
+        detail = history.rule_detail(conn, rule)
+        detail["held_back"] = [
+            row[0] for row in conn.execute("SELECT transaction_id FROM rule_exceptions WHERE rule_id = ?", (rule_id,))
+        ]
+        detail["booked"] = [
+            row[0] for row in conn.execute("SELECT id FROM transactions WHERE rule_id = ? AND category_source = 'rule'", (rule_id,))
+        ]
+        conn.execute("DELETE FROM rules WHERE id = ?", (rule_id,))
+        history.record(
+            conn, "rule-delete",
+            f"Deleted rule {rule_id} ({rule['match_type']} {rule['pattern']!r}); its {len(detail['booked'])} row(s) keep their category.",
+            rule["business_id"], detail,
+        )
 
 
 def apply_rules(conn: sqlite3.Connection, business_id: int, recheck: bool = False) -> dict:
@@ -192,14 +225,18 @@ def apply_rules(conn: sqlite3.Connection, business_id: int, recheck: bool = Fals
     if recheck:
         condition = "(t.category_id IS NULL OR t.category_source = 'rule')"
     rows = conn.execute(
-        "SELECT t.id, t.account_id, t.description, t.memo, t.merchant, t.amount_cents, t.category_id, t.rule_id"
+        "SELECT t.id, t.account_id, t.description, t.memo, t.merchant, t.amount_cents, t.category_id, t.rule_id,"
+        " t.category_source"
         " FROM transactions t JOIN accounts a ON a.id = t.account_id"
         f" WHERE a.business_id = ? AND {condition}",
         (business_id,),
     ).fetchall()
     categorized = changed = cleared = 0
+    labels = history.category_labels(conn, business_id)
+    changes = []
     with transaction(conn):
         for row in rows:
+            before = history.booking(row["category_id"], labels.get(row["category_id"]), row["category_source"], row["rule_id"])
             rule = first_match(
                 rules,
                 row["account_id"],
@@ -216,6 +253,7 @@ def apply_rules(conn: sqlite3.Connection, business_id: int, recheck: bool = Fals
                         (row["id"],),
                     )
                     cleared += 1
+                    changes.append((row["id"], before, history.booking(None, None, None, None)))
                 continue
             if row["category_id"] == rule.category_id and row["rule_id"] == rule.id:
                 continue
@@ -223,10 +261,18 @@ def apply_rules(conn: sqlite3.Connection, business_id: int, recheck: bool = Fals
                 "UPDATE transactions SET category_id = ?, category_source = 'rule', rule_id = ? WHERE id = ?",
                 (rule.category_id, rule.id, row["id"]),
             )
+            changes.append((row["id"], before, history.booking(rule.category_id, labels.get(rule.category_id), "rule", rule.id)))
             if row["category_id"] is None:
                 categorized += 1
             elif row["category_id"] != rule.category_id:
                 changed += 1
+        if changes:
+            history.record(
+                conn, "rule-apply",
+                f"Rules booked {categorized} row(s), changed {changed} and sent {cleared} back to review.",
+                business_id, {"recheck": recheck, "categorized": categorized, "changed": changed, "returned_to_review": cleared},
+                changes,
+            )
     return {"categorized": categorized, "changed": changed, "returned_to_review": cleared}
 
 
@@ -261,7 +307,7 @@ def import_rules(conn: sqlite3.Connection, business_id: int, path: Path) -> int:
     missing = {"match", "pattern", "category"} - set(reader.fieldnames or [])
     if missing:
         raise BooksError(f"{Path(path).name} is missing column(s): {', '.join(sorted(missing))}")
-    count = 0
+    added: List[int] = []
     with transaction(conn):
         for line, row in enumerate(reader, start=2):
             try:
@@ -272,7 +318,7 @@ def import_rules(conn: sqlite3.Connection, business_id: int, path: Path) -> int:
                     if account["business_id"] != business_id:
                         raise BooksError(f"account {row['account']!r} belongs to another business")
                     account_id = account["id"]
-                add_rule(
+                rule_id = add_rule(
                     conn,
                     business_id,
                     (row["match"] or "").strip(),
@@ -283,8 +329,14 @@ def import_rules(conn: sqlite3.Connection, business_id: int, path: Path) -> int:
                     direction=(row.get("direction") or "").strip() or None,
                     min_cents=parse_cents(row["min"]) if (row.get("min") or "").strip() else None,
                     max_cents=parse_cents(row["max"]) if (row.get("max") or "").strip() else None,
+                    record=False,
                 )
             except (BooksError, ValueError) as exc:
                 raise BooksError(f"{Path(path).name} line {line}: {exc}. No rules were added.") from None
-            count += 1
-    return count
+            added.append(rule_id)
+        if added:
+            history.record(
+                conn, "rule-import", f"Added {len(added)} rule(s) from {name}.", business_id,
+                {"file_name": name, "rule_ids": added},
+            )
+    return len(added)

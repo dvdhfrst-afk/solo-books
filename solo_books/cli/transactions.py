@@ -1,7 +1,7 @@
 """Single rows: finding, showing, adding, correcting, deleting and noting them."""
 from __future__ import annotations
 
-from .. import books, ledger, render, schedule_c
+from .. import books, history, ledger, payees, render, schedule_c, tags
 from ..errors import BooksError
 from ..money import format_cents, parse_cents
 from ..periods import parse_iso_date, parse_period
@@ -18,6 +18,9 @@ def cmd_txn_list(args, conn) -> int:
         if business_id is None:
             business_id = books.get_business(conn, None)["id"]
         category_id = books.find_category(conn, business_id, args.category)["id"]
+    tag_ids = None
+    if args.tag:
+        tag_ids = [tag["id"] for tag in tags.tags_named(conn, args.tag, business_id).values()]
     rows = ledger.find_transactions(
         conn,
         business_id=business_id,
@@ -27,6 +30,7 @@ def cmd_txn_list(args, conn) -> int:
         uncategorized=args.uncategorized,
         search=args.search,
         limit=args.limit,
+        tag_ids=tag_ids,
     )
     if args.format == "csv":
         form = schedule_c.latest_form()
@@ -72,6 +76,9 @@ def cmd_txn_show(args, conn) -> int:
     print(f"  Amount:      {format_cents(row['amount_cents'])}")
     print(f"  Description: {row['description']}")
     print(f"  Merchant:    {row['merchant']}")
+    payee = payees.payee_of(conn, row["business_id"], row["merchant"])
+    if payee.key != row["merchant"] or payee.renamed:
+        print(f"  Payee:       {payee.name}")
     if row["memo"]:
         print(f"  Memo:        {row['memo']}")
     if row["reference"]:
@@ -91,6 +98,11 @@ def cmd_txn_show(args, conn) -> int:
         print("  Imported:    no, added by hand")
     if row["note"]:
         print(f"  Note:        {row['note']}")
+    carried = tags.tags_of(conn, row["id"])
+    print(f"  Tags:        {', '.join(carried) if carried else 'none'}")
+    changes = history.list_entries(conn, transaction_id=row["id"])
+    if changes:
+        print(f"  History:     {len(changes)} change(s), latest {changes[0]['changed_at']} UTC. See: history list --row {row['id']}")
     return 0
 
 
@@ -143,6 +155,7 @@ def register(commands) -> None:
     p.add_argument("--category")
     p.add_argument("--uncategorized", action="store_true")
     p.add_argument("--search")
+    p.add_argument("--tag", help="only rows carrying this tag")
     p.add_argument("--limit", type=positive_arg)
     p.add_argument("--format", choices=("table", "csv"), default="table")
     p.add_argument("-o", "--output")

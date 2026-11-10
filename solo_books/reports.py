@@ -94,14 +94,18 @@ def _bucket_index(buckets: List[Period], day: date) -> int:
     raise AssertionError(f"{day} is outside the report period")
 
 
-def profit_and_loss(conn: sqlite3.Connection, business: sqlite3.Row, period: Period, by: str = "total") -> Pnl:
+def profit_and_loss(
+    conn: sqlite3.Connection, business: sqlite3.Row, period: Period, by: str = "total", tag_id: Optional[int] = None
+) -> Pnl:
+    """With a tag, only the rows carrying it count, and the queue's figures are those rows' too."""
     buckets = split_period(period, by)
+    tagged = " AND t.id IN (SELECT transaction_id FROM transaction_tags WHERE tag_id = ?)" if tag_id is not None else ""
     rows = conn.execute(
         "SELECT t.posted_on, t.amount_cents, c.id AS category_id, c.code, c.name, c.kind"
         " FROM transactions t JOIN accounts a ON a.id = t.account_id"
         " LEFT JOIN categories c ON c.id = t.category_id"
-        " WHERE a.business_id = ? AND t.posted_on BETWEEN ? AND ?",
-        (business["id"], period.start.isoformat(), period.end.isoformat()),
+        " WHERE a.business_id = ? AND t.posted_on BETWEEN ? AND ?" + tagged,
+        (business["id"], period.start.isoformat(), period.end.isoformat(), *([tag_id] if tag_id is not None else [])),
     ).fetchall()
 
     off = OffReport()

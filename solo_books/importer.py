@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
+from . import history
 from .csvmap import Mapping, ParsedFile, ParsedRow, decode, parse_text, read_bytes
 from .db import transaction
 from .errors import BooksError
@@ -125,6 +126,19 @@ def import_export(
             _check_remapped_file(earlier, how_read, result, stop=not dry_run)
             if dry_run:
                 raise _DryRun
+            history.record(
+                conn,
+                "import",
+                f"Imported {path.name} into {account['name']}: {result.rows_new} new row(s), "
+                f"{result.auto_categorized} booked by rules.",
+                account["business_id"],
+                {
+                    "import_id": result.import_id, "account": account["name"], "file_name": path.name,
+                    "rows_read": result.rows_read, "rows_new": result.rows_new, "rows_duplicate": result.rows_duplicate,
+                    "booked_by_rules": result.auto_categorized,
+                },
+                [(row_id, None, state) for row_id, state in _snapshots(conn, account["name"], "t.import_id = ?", result.import_id)],
+            )
     except _DryRun:
         result.import_id = None
 
@@ -354,6 +368,16 @@ def _insert_rows(
         )
 
 
+def _snapshots(conn: sqlite3.Connection, account_name: str, where: str, value: int) -> List[Tuple[int, dict]]:
+    """What the history keeps about rows an import put in or took out."""
+    rows = conn.execute(
+        "SELECT t.*, ? AS account_name, c.code AS category_code, c.name AS category_name FROM transactions t"
+        f" LEFT JOIN categories c ON c.id = t.category_id WHERE {where} ORDER BY t.id",
+        (account_name, value),
+    ).fetchall()
+    return [(row["id"], history.snapshot(row)) for row in rows]
+
+
 def _record_held(conn: sqlite3.Connection, import_id: int, transaction_id: int) -> None:
     conn.execute(
         "INSERT OR IGNORE INTO import_rows (import_id, transaction_id) VALUES (?, ?)", (import_id, transaction_id)
@@ -476,13 +500,28 @@ def undo_import(conn: sqlite3.Connection, import_id: int, force: bool = False) -
             f"{manual} row(s) from import {import_id} were categorized by hand and that work would be lost. "
             "Pass --force to undo anyway."
         )
+    account = conn.execute("SELECT name, business_id FROM accounts WHERE id = ?", (row["account_id"],)).fetchone()
     with transaction(conn):
+        leaving = {item["id"] for item in going}
+        removed = [
+            (row_id, state, None)
+            for row_id, state in _snapshots(conn, account["name"], "t.import_id = ?", import_id)
+            if row_id in leaving
+        ]
         for item in kept:
             conn.execute("UPDATE transactions SET import_id = ? WHERE id = ?", (item["also_in"], item["id"]))
         for item in going:
             conn.execute("DELETE FROM transactions WHERE id = ?", (item["id"],))
         conn.execute("DELETE FROM import_rows WHERE import_id = ?", (import_id,))
         conn.execute("UPDATE imports SET undone_at = datetime('now') WHERE id = ?", (import_id,))
+        history.record(
+            conn,
+            "import-undo",
+            f"Took import {import_id} ({row['file_name']}) back out: {len(going)} row(s) removed, {len(kept)} kept.",
+            account["business_id"],
+            {"import_id": import_id, "account": account["name"], "file_name": row["file_name"], "removed": len(going), "kept": len(kept)},
+            removed,
+        )
     return {
         "removed": len(going),
         "kept": len(kept),

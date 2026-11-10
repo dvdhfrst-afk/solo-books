@@ -172,6 +172,68 @@ MIGRATIONS = [
     PRAGMA application_id = 1397705807;
     CREATE INDEX transactions_by_amount ON transactions (account_id, amount_cents, posted_on);
     """,
+    """
+    -- Every change to the books. What a change touched is named by plain numbers and copied values,
+    -- not by links, so the record outlives the rows, rules and names it describes.
+    CREATE TABLE history (
+        id           INTEGER PRIMARY KEY,
+        changed_at   TEXT NOT NULL DEFAULT (datetime('now')),
+        source       TEXT NOT NULL DEFAULT '',
+        kind         TEXT NOT NULL,
+        business_id  INTEGER,
+        summary      TEXT NOT NULL,
+        detail_json  TEXT NOT NULL DEFAULT '{}',
+        reverted_by  INTEGER
+    );
+    CREATE INDEX history_by_time ON history (changed_at);
+    -- One bank row a change touched, with what mattered about it before and after.
+    CREATE TABLE history_rows (
+        history_id      INTEGER NOT NULL REFERENCES history(id) ON DELETE CASCADE,
+        transaction_id  INTEGER NOT NULL,
+        before_json     TEXT,
+        after_json      TEXT
+    );
+    CREATE INDEX history_rows_by_entry ON history_rows (history_id);
+    CREATE INDEX history_rows_by_transaction ON history_rows (transaction_id);
+
+    -- Free-form labels on rows, such as a client or a project.
+    CREATE TABLE tags (
+        id           INTEGER PRIMARY KEY,
+        business_id  INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+        name         TEXT NOT NULL COLLATE NOCASE,
+        created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (business_id, name)
+    );
+    CREATE TABLE transaction_tags (
+        tag_id          INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+        transaction_id  INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+        PRIMARY KEY (tag_id, transaction_id)
+    );
+    CREATE INDEX transaction_tags_by_transaction ON transaction_tags (transaction_id);
+
+    -- What a person said about a merchant name: a better name, a contractor flag, or that it is
+    -- another spelling of a second payee. A merchant with no entry here is its own payee.
+    CREATE TABLE payees (
+        id            INTEGER PRIMARY KEY,
+        business_id   INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+        merchant      TEXT NOT NULL,
+        display_name  TEXT,
+        contractor    INTEGER NOT NULL DEFAULT 0 CHECK (contractor IN (0, 1)),
+        merged_into   INTEGER REFERENCES payees(id) ON DELETE SET NULL,
+        UNIQUE (business_id, merchant)
+    );
+
+    -- Planned amounts per category, as reports read them: income positive, spending positive.
+    -- Month 0 holds a whole year's amount; months 1 to 12 hold one month each.
+    CREATE TABLE budgets (
+        business_id   INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+        category_id   INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+        year          INTEGER NOT NULL,
+        month         INTEGER NOT NULL CHECK (month BETWEEN 0 AND 12),
+        amount_cents  INTEGER NOT NULL CHECK (typeof(amount_cents) = 'integer' AND amount_cents >= 0),
+        PRIMARY KEY (category_id, year, month)
+    );
+    """,
 ]
 
 

@@ -12,13 +12,17 @@ from typing import List, Optional
 
 from .. import __version__
 from . import (
+    budgeting,
     businesses,
     categorization_rules,
+    history_log,
     importing,
+    payee_directory,
     reconciling,
     reporting,
     review_queue,
     setup_safety,
+    tagging,
     transactions,
     web_page,
 )
@@ -31,8 +35,12 @@ AREAS = (
     categorization_rules,
     review_queue,
     transactions,
+    tagging,
+    payee_directory,
     reconciling,
     reporting,
+    budgeting,
+    history_log,
     web_page,
 )
 

@@ -71,6 +71,8 @@ def _print_check(report: safety.CheckReport) -> None:
             f"{counts.get('rows', 0)} row(s), {counts.get('waiting', 0)} waiting for review, "
             f"{counts.get('rules', 0)} rule(s), {counts.get('finished', 0)} finished reconciliation(s)."
         )
+        if "history" in counts:
+            print(f"  {counts['history']} change(s) recorded in the history.")
     for note in report.notes:
         print(f"  NOTE: {note}")
     for problem in report.problems:

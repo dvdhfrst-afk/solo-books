@@ -9,6 +9,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Set, Tuple
 
+from . import budgets, history, payees, tags
 from .db import APPLICATION_ID, BUSY_SECONDS, connect, friendly_error, schema_version
 from .csvmap import Mapping
 from .errors import BooksError
@@ -162,6 +163,13 @@ def _check_bookkeeping(conn: sqlite3.Connection, report: CheckReport) -> None:
         "row(s) still belong to an import that was undone.",
     )
     _check_rows(conn, report)
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    # Books from before a table existed are read as they are, since 'check' never upgrades a file.
+    for table, module in (("history", history), ("tags", tags), ("payees", payees), ("budgets", budgets)):
+        if table in tables:
+            report.problems.extend(module.problems(conn))
+    if "history" in tables:
+        report.counts["history"] = conn.execute("SELECT COUNT(*) FROM history").fetchone()[0]
     for account in conn.execute("SELECT name, mapping_json FROM accounts WHERE mapping_json IS NOT NULL").fetchall():
         try:
             Mapping.from_json(account["mapping_json"])
