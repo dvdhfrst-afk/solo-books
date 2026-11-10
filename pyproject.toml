@@ -26,7 +26,7 @@ dependencies = []
 solo-books = "solo_books.cli:main"
 
 [tool.setuptools]
-packages = ["solo_books"]
+packages = ["solo_books", "solo_books.cli", "solo_books.web"]
 
 [tool.setuptools.package-data]
 solo_books = ["data/*"]

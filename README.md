@@ -540,7 +540,7 @@ console redirect may not handle non-English names.
 
 | Module | Job |
 |---|---|
-| `cli.py` | Commands and arguments. No bookkeeping logic. |
+| `cli/` | Commands and arguments, one module per area of commands. No bookkeeping logic. |
 | `db.py` | The SQLite file, its schema and versioned migrations. |
 | `safety.py`, `files.py` | Check, restore, salvage, and atomic writes. |
 | `books.py` | Businesses, accounts, the chart of accounts, inventory counts. |
@@ -552,8 +552,14 @@ console redirect may not handle non-English names.
 | `reconcile.py` | Comparing the books with a statement. |
 | `reports.py`, `schedule_c.py` | Profit and loss, balances and the rollup. |
 | `render.py` | Text tables and CSV. |
-| `web.py`, `data/review.html` | The local review page. |
+| `web/`, `data/review.html` | The local review page: the server, its table of addresses, and the queue's page and JSON. |
 | `money.py`, `periods.py`, `text.py` | Cents, date ranges, description cleanup. |
+
+Each module in `cli/` holds one area of commands, such as `reconciling.py` for `reconcile`, and has a `register`
+function that adds them to the parser. `AREAS` in `cli/__init__.py` lists the areas in the order `--help` shows
+them, and `cli/common.py` holds what they share. In `web/`, each address the page uses is registered in `routes.py` by
+the module that answers it, and `server.py` checks every request before it gets there.
+[CONTRIBUTING.md](CONTRIBUTING.md) says how to add a command area or a web address.
 
 A positive `amount_cents` puts money into an account or pays down a card. A negative one takes money out or adds to what
 a card is owed. Reports turn that into the figures people expect.

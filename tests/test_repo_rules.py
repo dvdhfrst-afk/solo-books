@@ -60,7 +60,7 @@ class Repo(unittest.TestCase):
                     self.assertIn(name.split(".")[0], allowed, f"{path}: {name}")
 
     def test_money_code_uses_no_floats(self) -> None:
-        for path in (REPO_ROOT / "solo_books").glob("*.py"):
+        for path in (REPO_ROOT / "solo_books").rglob("*.py"):
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 if isinstance(node, ast.Constant):
                     self.assertNotIsInstance(node.value, float, f"{path}:{node.lineno}")

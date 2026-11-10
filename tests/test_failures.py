@@ -178,14 +178,14 @@ class CleanFailure(BooksCase):
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM transactions WHERE category_id IS NOT NULL").fetchone()[0], 1)
 
     def test_a_bug_gets_a_sentence_and_its_own_status(self) -> None:
-        with mock.patch("solo_books.cli.cmd_status", side_effect=ValueError("boom")):
+        with mock.patch("solo_books.cli.setup_safety.cmd_status", side_effect=ValueError("boom")):
             code, out, err = self.run_cli("status")
         self.assertEqual(code, 3)
         self.assertIn("bug", err)
         self.assertNotIn("Traceback", err + out)
 
     def test_the_debug_setting_shows_the_real_error(self) -> None:
-        with mock.patch("solo_books.cli.cmd_status", side_effect=ValueError("boom")), mock.patch.dict(os.environ, {cli.DEBUG_ENV_VAR: "1"}):
+        with mock.patch("solo_books.cli.setup_safety.cmd_status", side_effect=ValueError("boom")), mock.patch.dict(os.environ, {cli.DEBUG_ENV_VAR: "1"}):
             with self.assertRaises(ValueError):
                 self.run_cli("status")
 
