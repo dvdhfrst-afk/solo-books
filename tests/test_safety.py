@@ -503,7 +503,7 @@ class FromEverySchema(BooksCase):
                 "INSERT INTO transaction_tags (tag_id, transaction_id) SELECT 1, t.id FROM transactions t"
                 " JOIN accounts a ON a.id = t.account_id WHERE a.business_id = 1 ORDER BY t.id LIMIT 2"
             )
-            conn.execute("INSERT INTO payees (business_id, merchant, display_name, contractor) VALUES (1, 'REDWOOD PLAZA', 'Redwood', 1)")
+            conn.execute("INSERT INTO payees (business_id, merchant, display_name, contractor) VALUES (1, 'REDWOOD PLAZA RENT', 'Redwood', 1)")
             conn.execute(
                 "INSERT INTO budgets (business_id, category_id, year, month, amount_cents)"
                 " SELECT 1, id, 2025, 0, 120000 FROM categories WHERE business_id = 1 AND kind = 'expense' ORDER BY id LIMIT 1"
