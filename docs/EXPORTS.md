@@ -28,7 +28,7 @@ type are always ISO.
 **Tags.** `pnl`, `cashflow`, `categories`, `trend`, `budget` and `payees` take `--tag NAME` to count only the rows that
 carry that tag. Every format says so: the table and the pages start with a line such as `Only rows tagged Harbor
 Lane.`, the CSV ends with a note row, and the JSON has `"tag": "Harbor Lane"` (`null` without one). The other reports
-refuse `--tag`, since a balance or a tax form line is not a figure a tag can split.
+refuse `--tag`, since a balance or a tax form line is not a figure a tag can narrow.
 
 ```bash
 python -m solo_books report pnl --period 2025 --tag "Harbor Lane"
