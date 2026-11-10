@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from .. import books, db, render
+from .. import books, config, db, render
 from ..errors import BooksError
 from ..periods import FIRST_YEAR, LAST_YEAR, check_year
 from ..text import printable
@@ -33,16 +33,26 @@ def program_name() -> str:
 # Building the parser
 
 def db_option() -> argparse.ArgumentParser:
-    """The --db flag, which the program and every command accept."""
+    """The --db and --profile flags, which the program and every command accept."""
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--db", default=argparse.SUPPRESS, help=f"books file (default ${db.DB_ENV_VAR}, else ./{db.DEFAULT_DB_NAME})")
+    parser.add_argument(
+        "--db", default=argparse.SUPPRESS,
+        help=f"books file (default ${db.DB_ENV_VAR}, else the profile or settings file, else ./{db.DEFAULT_DB_NAME})",
+    )
+    parser.add_argument(
+        "--profile", default=argparse.SUPPRESS, metavar="NAME",
+        help=f"use this profile's settings (default ${config.PROFILE_ENV_VAR}, else the settings file's default)",
+    )
     return parser
 
 
-def add_command(group, name, handler, help_text, needs_conn=True) -> argparse.ArgumentParser:
-    """Add one command. Its handler gets (args, conn), or only (args) when needs_conn is False."""
+def add_command(group, name, handler, help_text, needs_conn=True, uses_settings=True) -> argparse.ArgumentParser:
+    """Add one command. Its handler gets (args, conn), or only (args) when needs_conn is False.
+
+    Before it runs, args.settings holds every setting and args.db the books file, unless uses_settings is False.
+    """
     sub = group.add_parser(name, help=help_text, description=help_text, parents=[db_option()])
-    sub.set_defaults(handler=handler, needs_conn=needs_conn)
+    sub.set_defaults(handler=handler, needs_conn=needs_conn, uses_settings=uses_settings)
     return sub
 
 
@@ -101,6 +111,15 @@ def deliver(text: str, output: Optional[str]) -> None:
         print(f"Wrote {output}")
 
 
+def the_business(conn, args) -> sqlite3.Row:
+    """The one business a command works on: --business, else the business setting, else the only business."""
+    return books.get_business(conn, args.settings.pick("business", args.business))
+
+
+def report_format(args) -> str:
+    return args.settings.pick("report_format", args.format)
+
+
 def scope_ids(conn, args) -> tuple:
     business_id = books.get_business(conn, args.business)["id"] if args.business else None
     account_id = books.get_account(conn, args.account)["id"] if args.account else None
@@ -131,7 +150,16 @@ class PrintableOnly:
         return getattr(self._stream, name)
 
 
+def apply_settings(args) -> None:
+    """Look up every setting for this command, and settle which books file it uses."""
+    if not getattr(args, "uses_settings", True):
+        return
+    args.settings = config.resolve({"books": args.db}, getattr(args, "profile", None))
+    args.db = args.settings["books"]
+
+
 def _run(args) -> int:
+    apply_settings(args)
     if not args.needs_conn:
         return args.handler(args)
     conn = db.connect(db.resolve_db_path(args.db))

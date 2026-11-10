@@ -410,10 +410,10 @@ class Upgrades(BooksCase):
 
     def test_every_row_survives_and_the_figures_still_tie(self) -> None:
         old = sqlite3.connect(str(self.db_path))
-        before = {
-            table: old.execute(f"SELECT * FROM {table} ORDER BY 1, 2").fetchall()
-            for table in ("businesses", "categories", "accounts", "imports", "rules", "transactions", "inventory_counts", "import_rows")
-        }
+        tables = ("businesses", "categories", "accounts", "imports", "rules", "transactions", "inventory_counts", "import_rows")
+        # Later schemas add columns. Every column the first schema had must still hold what it held.
+        columns = {table: ", ".join(row[1] for row in old.execute(f"PRAGMA table_info({table})")) for table in tables}
+        before = {table: old.execute(f"SELECT {columns[table]} FROM {table} ORDER BY 1, 2").fetchall() for table in tables}
         old.close()
         code, out, err = self.run_cli("account", "show", "A Checking")
         self.assertEqual(code, 0, err)
@@ -422,7 +422,7 @@ class Upgrades(BooksCase):
         self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], db.schema_version())
         self.assertEqual(conn.execute("PRAGMA application_id").fetchone()[0], db.APPLICATION_ID)
         for table, rows in before.items():
-            self.assertEqual(conn.execute(f"SELECT * FROM {table} ORDER BY 1, 2").fetchall(), rows, table)
+            self.assertEqual(conn.execute(f"SELECT {columns[table]} FROM {table} ORDER BY 1, 2").fetchall(), rows, table)
         conn.close()
         self.assertIn("11,928.15", out)
         self.assertIn("no problems found", self.ok("check"))

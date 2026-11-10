@@ -99,8 +99,9 @@ def run_interactive(
     account_id: Optional[int],
     read: Callable[[str], str],
     write: Callable[[str], None],
+    show_date: Callable[[str], str] = str,
 ) -> dict:
-    """Walk the queue one row at a time. Each answer is saved as it is given."""
+    """Walk the queue one row at a time. Each answer is saved as it is given. show_date writes a row's date."""
     totals = {"booked": 0, "skipped": 0}
     # The rows are read once. After that only what left the queue is looked up, so long queues answer quickly.
     rows = queue(conn, business_id, account_id)
@@ -113,7 +114,7 @@ def run_interactive(
         group = [other for other in rows if other["merchant"] == row["merchant"] and other["business_id"] == row["business_id"]]
         same = [other["id"] for other in group]
         write(
-            f"\n[{len(rows)} left] {row['posted_on']}  {format_cents(row['amount_cents']):>12}  "
+            f"\n[{len(rows)} left] {show_date(row['posted_on'])}  {format_cents(row['amount_cents']):>12}  "
             f"{row['account_name']} ({row['business_name']})\n  {row['description']}"
         )
         if row["memo"]:
@@ -122,7 +123,8 @@ def run_interactive(
             total = format_cents(sum(other["amount_cents"] for other in group))
             write(f"  {len(same)} queued rows from {row['merchant']}, total {total}. 'a' or 'r' books all of them:")
             for other in group[:_ROWS_LISTED]:
-                write(f"    {other['posted_on']}  {format_cents(other['amount_cents']):>12}  {other['description']}")
+                day = show_date(other["posted_on"])
+                write(f"    {day}  {format_cents(other['amount_cents']):>12}  {other['description']}")
             if len(group) > _ROWS_LISTED:
                 write(f"    ...and {len(group) - _ROWS_LISTED} more")
         try:

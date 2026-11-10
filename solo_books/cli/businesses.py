@@ -12,7 +12,7 @@ from ..errors import BooksError
 from ..files import write_atomic
 from ..money import format_cents, parse_cents
 from ..periods import parse_iso_date
-from .common import add_command, add_group, program_name, year_arg
+from .common import add_command, add_group, program_name, the_business, year_arg
 
 
 def cmd_business_add(args, conn) -> int:
@@ -50,7 +50,7 @@ def _current_line(form, category) -> str:
 
 
 def cmd_chart_list(args, conn) -> int:
-    business = books.get_business(conn, args.business)
+    business = the_business(conn, args)
     form = schedule_c.load_form(args.year) if args.year else schedule_c.latest_form()
     rows = [
         [c["code"], c["name"], c["kind"], _current_line(form, c), "" if c["active"] else "retired"]
@@ -66,14 +66,14 @@ def cmd_chart_list(args, conn) -> int:
 
 
 def cmd_chart_add(args, conn) -> int:
-    business = books.get_business(conn, args.business)
+    business = the_business(conn, args)
     category = books.add_category(conn, business["id"], args.code, args.name, args.kind, args.line, args.year)
     print(f"Added {category['code']} {category['name']} to {business['name']}.")
     return 0
 
 
 def cmd_chart_map(args, conn) -> int:
-    business = books.get_business(conn, args.business)
+    business = the_business(conn, args)
     category = books.find_category(conn, business["id"], args.category)
     books.map_category(conn, category, None if args.none else args.line, args.year)
     print(f"{category['code']} {category['name']}: " + ("off the form." if args.none else f"now on line {args.line}."))
@@ -81,7 +81,7 @@ def cmd_chart_map(args, conn) -> int:
 
 
 def cmd_chart_rename(args, conn) -> int:
-    business = books.get_business(conn, args.business)
+    business = the_business(conn, args)
     category = books.find_category(conn, business["id"], args.category)
     books.rename_category(conn, category, args.new_name)
     print(f"{category['code']} is now {args.new_name}.")
@@ -89,7 +89,7 @@ def cmd_chart_rename(args, conn) -> int:
 
 
 def cmd_chart_retire(args, conn) -> int:
-    business = books.get_business(conn, args.business)
+    business = the_business(conn, args)
     category = books.find_category(conn, business["id"], args.category)
     books.retire_category(conn, category)
     print(f"{category['code']} {category['name']} is retired. Rows already booked to it stay and still report.")
@@ -142,7 +142,7 @@ def _mapping_from_args(args, base: Optional[Mapping] = None) -> Optional[Mapping
 
 
 def cmd_account_add(args, conn) -> int:
-    business = books.get_business(conn, args.business)
+    business = the_business(conn, args)
     mapping = _mapping_from_args(args)
     if (args.opening_balance is None) != (args.opening_date is None):
         raise BooksError("give --opening-balance and --opening-date together")

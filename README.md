@@ -50,7 +50,8 @@ Everywhere below, `solo-books` can stand in for `python -m solo_books`. The samp
 because they name files in `samples/`.
 
 Books live in `books.sqlite3` in the current folder. Use `--db FILE` or set the `SOLO_BOOKS_DB` environment
-variable to keep them elsewhere. Git ignores books in this folder.
+variable to keep them elsewhere, or keep that choice in the settings file. See [Settings and profiles](#settings-and-profiles).
+Git ignores books in this folder.
 
 ## Try it on the sample year
 
@@ -361,13 +362,18 @@ python -m solo_books imports list
 
 ### Rules
 
-Rules run in priority order, lowest number first, and the first match wins. Each has one match type:
-`--contains`, `--starts`, `--exact` or `--regex`, none of them case-sensitive. `--exact` means the whole description, or
-the merchant name as `rules test` reads it. A rule made with `r` at the review prompt, or with the box on the web page, is
+A rule has conditions, every one of which must match a row, and books a category. The first enabled rule that matches
+books the row, trying rules by priority, lowest number first. A condition on the wording is one of `--contains`,
+`--starts-with`, `--exact` or `--regex`, none of them case-sensitive. `--exact` means the whole description, or the
+merchant name as `rules test` reads it. A rule made with `r` at the review prompt, or with the box on the web page, is
 an exact rule on the merchant name. It is not offered for a name that only says how the money moved, such as `CHECK` or
 `WIRE TRANSFER FROM`, since many payees share those. Rows like that stay yours to book, one at a time or as a listed
-group. A short `--contains` reaches much further: `PAYMENT` catches every row with that word in it. A rule can be limited with
-`--direction in` or `out`, `--min`, `--max` and `--account`.
+group. A short `--contains` reaches much further: `PAYMENT` catches every row with that word in it.
+
+The other conditions are the size of the amount (`--amount-min`, `--amount-max`, or both for a range or one exact
+figure), `--direction in` or `out`, `--account`, a date range (`--from`, `--to`) and a range of days of the month
+(`--day-from`, `--day-to`). `--note` also puts a note on the rows the rule books.
+[docs/RULES.md](docs/RULES.md) describes every condition and action.
 
 ```bash
 python -m solo_books rules add --business "Business A" --contains "LEDGERLY" --category "Software subscriptions"
@@ -377,13 +383,51 @@ python -m solo_books rules add --business "Business A" --contains "LEDGERLY" --c
 python -m solo_books rules test "LEDGERLY LABS SUBSCRIPTION" --business "Business A"
 ```
 
+This one books the monthly rent only when it is the usual amount and early in the month, and notes the lease on each
+row:
+
+```bash
+python -m solo_books rules add --business "Business A" --exact "REDWOOD PLAZA RENT" --amount-min 850.00 --amount-max 850.00 --day-from 1 --day-to 10 --note "Suite 4 lease" --category "Office rent"
+```
+
+It goes in at priority 100, after the sample's older `REDWOOD PLAZA` rule, which still books those rows first.
+`rules list` shows the order, each rule's conditions, whether it is on, and how many rows it booked. The new rule is
+number 30 in the sample books. Move it to the top, then recheck, and the rent rows carry the note:
+
 ```bash
 python -m solo_books rules list --business "Business A"
 ```
 
-Rules never overwrite a row you categorized by hand. `rules apply` runs them over the queue, and `rules apply --recheck`
-also re-runs them over rows that rules booked earlier, which is what you want after changing a rule.
-`rules export` and `rules import` move a rule set between businesses or into a file you keep.
+```bash
+python -m solo_books rules move 30 --to 1
+```
+
+```bash
+python -m solo_books rules apply --recheck
+```
+
+To see which rules were tried on a row and why each one matched or did not, give its id. Row 2 is January's rent:
+
+```bash
+python -m solo_books rules explain 2
+```
+
+`rules edit ID` changes a rule's conditions, category or note, `rules disable ID` stops a rule booking rows without
+losing it, and `rules enable ID` brings it back. Rules never overwrite a row you categorized by hand. `rules apply` runs
+them over the queue, and `rules apply --recheck` also re-runs them over rows that rules booked earlier, which is what you
+want after changing a rule.
+
+`rules export` and `rules import` move a rule set between businesses or into a file you keep. CSV carries the columns
+rules have always had. A JSON rule pack carries every condition and action, and importing the same pack twice adds
+nothing the second time:
+
+```bash
+python -m solo_books rules export --business "Business A" --format json -o rules-business-a.json
+```
+
+```bash
+python -m solo_books rules import rules-business-a.json --business "Business A"
+```
 
 To see everything about one row, including how it was booked, which files held it and its note:
 
@@ -460,14 +504,85 @@ long as its statement period is not finished. `reconcile reopen` unlocks the lat
 `account delete NAME` removes an account with no rows. If it has rows, `--with-rows` takes them with it, unless it has a
 finished reconciliation. `business delete NAME` removes a business that has no accounts left, with its chart and rules.
 
+## Settings and profiles
+
+Settings change the defaults commands use: the books file, the business, how reports and dates print, the review
+page's port, whether `import` runs the rules, and where backups go. They live in a JSON file you can read and edit. This
+prints where it is:
+
+```bash
+python -m solo_books config path
+```
+
+Show dates as 03/31/2025 instead of 2025-03-31, then see every setting and where its value came from:
+
+```bash
+python -m solo_books config set date_format us
+```
+
+```bash
+python -m solo_books config list
+```
+
+```bash
+python -m solo_books config unset date_format
+```
+
+A value comes from the first of these that has one: a flag on the command line, the setting's environment variable,
+the profile in use, the settings file, and last the setting's default. If the file is damaged, commands stop with one
+sentence saying so, and `config check` lists every problem in it.
+
+```bash
+python -m solo_books config check
+```
+
+A profile is a named set of settings, for keeping more than one set of books: one file per year, or a test copy to try
+things on. This makes a profile for a test copy, starts its books, and lists the profiles:
+
+```bash
+python -m solo_books profile add test-copy --db test-copy.sqlite3
+```
+
+```bash
+python -m solo_books --profile test-copy init
+```
+
+```bash
+python -m solo_books profile list
+```
+
+Every command takes `--profile NAME`. `profile use NAME` makes one the default, `status` names the profile in use and
+its books file, and `profile use --none` goes back to no default. `profile remove NAME` forgets a profile and leaves its
+books file alone.
+
+```bash
+python -m solo_books profile use test-copy
+```
+
+```bash
+python -m solo_books status
+```
+
+```bash
+python -m solo_books profile use --none
+```
+
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md) lists every setting, its type, default and environment variable.
+
 ## Keeping your books safe
 
 ```bash
 python -m solo_books backup
 ```
 
-That writes a checked copy named with today's date beside the books, and never overwrites anything. Or name the file
-yourself, such as `backup books-2025-12-31.sqlite3`. `status` shows when the last backup was made.
+That writes a checked copy named with today's date beside the books, or in the `backup_folder` setting, and never
+overwrites anything. Or name the file yourself, such as `backup books-2025-12-31.sqlite3`. `status` shows when the last
+backup was made. `backup --prune` then removes the oldest dated backups of those books, keeping ten, or the
+`backup_keep` setting, or as many as `--keep` says:
+
+```bash
+python -m solo_books backup --prune --keep 5
+```
 
 ```bash
 python -m solo_books check
@@ -541,6 +656,7 @@ console redirect may not handle non-English names.
 | Module | Job |
 |---|---|
 | `cli/` | Commands and arguments, one module per area of commands. No bookkeeping logic. |
+| `config.py`, `profiles.py` | The settings, the settings file, and profiles. |
 | `db.py` | The SQLite file, its schema and versioned migrations. |
 | `safety.py`, `files.py` | Check, restore, salvage, and atomic writes. |
 | `books.py` | Businesses, accounts, the chart of accounts, inventory counts. |
@@ -548,6 +664,7 @@ console redirect may not handle non-English names.
 | `layouts.py`, `data/layouts.json` | Ready-made mappings, and recognizing them from a file. |
 | `importer.py` | Importing, re-import safety, undo. |
 | `rules.py`, `review.py` | Categorization and the queue. |
+| `conditions.py`, `rule_packs.py` | What a rule can test and do, and rule packs. |
 | `ledger.py` | Finding, adding, deleting and booking rows. |
 | `reconcile.py` | Comparing the books with a statement. |
 | `reports.py`, `schedule_c.py` | Profit and loss, balances and the rollup. |
@@ -581,6 +698,8 @@ script that invented the sample year and knows each row's true category.
 ## More
 
 - [docs/BANK-LAYOUTS.md](docs/BANK-LAYOUTS.md): the layouts, and what to check in a dry run.
+- [docs/RULES.md](docs/RULES.md): every rule condition and action, the order, explain, and rule packs.
+- [docs/CONFIGURATION.md](docs/CONFIGURATION.md): every setting, where it comes from, and profiles.
 - [docs/RECOVERY.md](docs/RECOVERY.md): damage, restore, salvage, and what each message means.
 - [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md).
 

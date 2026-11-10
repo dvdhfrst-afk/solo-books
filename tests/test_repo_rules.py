@@ -109,7 +109,10 @@ class Repo(unittest.TestCase):
             self.assertTrue((REPO_ROOT / "samples" / "layouts" / f"example-{layout_id}.csv").is_file(), layout_id)
 
     def test_links_between_documents_lead_somewhere(self) -> None:
-        for name in ("README.md", "SECURITY.md", "CONTRIBUTING.md", "CHANGELOG.md", "docs/BANK-LAYOUTS.md", "docs/RECOVERY.md", "docs/TESTING.md"):
+        for name in (
+            "README.md", "SECURITY.md", "CONTRIBUTING.md", "CHANGELOG.md", "docs/BANK-LAYOUTS.md", "docs/RECOVERY.md",
+            "docs/TESTING.md", "docs/CONFIGURATION.md", "docs/RULES.md",
+        ):
             text = (REPO_ROOT / name).read_text(encoding="utf-8")
             for target in re.findall(r"\]\(([^)#]+\.md)\)", text):
                 self.assertTrue((REPO_ROOT / name).parent.joinpath(target).is_file(), f"{name}: {target}")
@@ -124,7 +127,10 @@ class Repo(unittest.TestCase):
 
     def test_every_doc_command_parses(self) -> None:
         parser = build_parser()
-        for name in ("docs/BANK-LAYOUTS.md", "docs/RECOVERY.md", "docs/TESTING.md", "CONTRIBUTING.md"):
+        for name in (
+            "docs/BANK-LAYOUTS.md", "docs/RECOVERY.md", "docs/TESTING.md", "CONTRIBUTING.md", "docs/CONFIGURATION.md",
+            "docs/RULES.md",
+        ):
             text = (REPO_ROOT / name).read_text(encoding="utf-8")
             for line in re.findall(r"^python -m solo_books (.+)$", text, re.M):
                 parser.parse_args(shlex.split(line))

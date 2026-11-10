@@ -21,7 +21,10 @@ def cmd_review(args, conn) -> int:
         return 0
     if args.list:
         table_rows = [
-            [str(r["id"]), r["posted_on"], r["account_name"], format_cents(r["amount_cents"]), r["description"]]
+            [
+                str(r["id"]), args.settings.show_date(r["posted_on"]), r["account_name"], format_cents(r["amount_cents"]),
+                r["description"],
+            ]
             for r in rows
         ]
         print(render.table(["Id", "Date", "Account", "Amount", "Description"], table_rows, {0, 3}))
@@ -31,7 +34,7 @@ def cmd_review(args, conn) -> int:
         print("Nothing waiting for review.")
         return 0
     print(f"{len(rows)} row(s) waiting. Type ? for help.")
-    totals = review.run_interactive(conn, business_id, account_id, input, print)
+    totals = review.run_interactive(conn, business_id, account_id, input, print, show_date=args.settings.show_date)
     left = len(review.queue(conn, business_id, account_id))
     print(f"\nBooked {totals['booked']}, skipped {totals['skipped']}, {left} still waiting.")
     return 0

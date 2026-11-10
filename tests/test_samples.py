@@ -71,6 +71,25 @@ class SampleYear(BooksCase):
     def test_totals_match_the_generator(self) -> None:
         self._review()
         self._add_missing_row()
+        self._check_totals()
+
+    def test_the_readme_rule_steps_leave_the_totals_alone(self) -> None:
+        self.ok(
+            "rules", "add", "--business", "Business A", "--exact", "REDWOOD PLAZA RENT", "--amount-min", "850.00",
+            "--amount-max", "850.00", "--day-from", "1", "--day-to", "10", "--note", "Suite 4 lease", "--category", "Office rent",
+        )
+        rent_rule = self.conn.execute("SELECT MAX(id) FROM rules").fetchone()[0]
+        self.assertIn("now number 1", self.ok("rules", "move", str(rent_rule), "--to", "1"))
+        self.ok("rules", "apply", "--recheck")
+        self.ok("rules", "explain", "2")
+        pack = self.dir / "rules-business-a.json"
+        self.ok("rules", "export", "--business", "Business A", "--format", "json", "-o", str(pack))
+        self.assertIn("Added 0 rule(s)", self.ok("rules", "import", str(pack), "--business", "Business A"))
+        self._review()
+        self._add_missing_row()
+        self._check_totals()
+
+    def _check_totals(self) -> None:
         for business, key in (("Business A", "Business A, after adding the missing parking row"), ("Business B", "Business B")):
             wanted = self.expected[key]
             rows = parse_csv(self.ok("report", "pnl", "--period", "2025", "--business", business, "--format", "csv"))

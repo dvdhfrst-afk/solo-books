@@ -248,7 +248,8 @@ def uncategorize(conn: sqlite3.Connection, transaction_ids: Iterable[int]) -> in
 
 def set_note(conn: sqlite3.Connection, transaction_id: int, note: str) -> None:
     get_transaction(conn, transaction_id)
-    conn.execute("UPDATE transactions SET note = ? WHERE id = ?", (clean_cell(note), transaction_id))
+    # A note someone writes is theirs from now on: no rule's note replaces it.
+    conn.execute("UPDATE transactions SET note = ?, note_from_rule = 0 WHERE id = ?", (clean_cell(note), transaction_id))
 
 
 def balance_through(conn: sqlite3.Connection, account: sqlite3.Row, through: date) -> Optional[int]:

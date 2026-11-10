@@ -10,13 +10,13 @@ from ..errors import BooksError
 from ..money import format_cents, parse_cents
 from ..periods import parse_period, year_period
 from ..text import slug
-from .common import add_command, add_group, chosen_businesses, deliver, year_arg
+from .common import add_command, add_group, chosen_businesses, deliver, report_format, the_business, year_arg
 
 
 def cmd_report_pnl(args, conn) -> int:
     period = parse_period(args.period)
     reports_list = [reports.profit_and_loss(conn, b, period, args.by) for b in chosen_businesses(conn, args.business)]
-    if args.format == "csv":
+    if report_format(args) == "csv":
         rows: List[List[str]] = []
         for pnl in reports_list:
             rows.extend(render.pnl_csv_rows(pnl))
@@ -54,7 +54,7 @@ def cmd_report_pnl(args, conn) -> int:
 def cmd_report_schedule_c(args, conn) -> int:
     businesses = chosen_businesses(conn, args.business)
     results = [reports.schedule_c(conn, b, args.year, args.lines_year) for b in businesses]
-    if args.format == "csv":
+    if report_format(args) == "csv":
         rows: List[List[str]] = []
         for result in results:
             rows.extend(render.schedule_c_csv_rows(result))
@@ -67,7 +67,7 @@ def cmd_report_schedule_c(args, conn) -> int:
 def cmd_report_balances(args, conn) -> int:
     period = parse_period(args.period)
     reports_list = [reports.balances(conn, b, period) for b in chosen_businesses(conn, args.business)]
-    if args.format == "csv":
+    if report_format(args) == "csv":
         rows: List[List[str]] = []
         for report in reports_list:
             rows.extend(render.balances_csv_rows(report))
@@ -136,7 +136,7 @@ def cmd_report_preparer(args, conn) -> int:
 
 
 def cmd_inventory_set(args, conn) -> int:
-    business = books.get_business(conn, args.business)
+    business = the_business(conn, args)
     books.set_inventory(conn, business["id"], args.year, parse_cents(args.beginning), parse_cents(args.ending))
     print(f"Inventory counts saved for {business['name']}, {args.year}.")
     return 0
@@ -164,19 +164,19 @@ def register(commands) -> None:
     p.add_argument("--period", required=True, help="2025, 2025-Q2, 2025-03 or 2025-01-15..2025-02-20")
     p.add_argument("--by", choices=("total", "month", "quarter", "year"), default="total")
     p.add_argument("--business", help="default: every business")
-    p.add_argument("--format", choices=("table", "csv"), default="table")
+    p.add_argument("--format", choices=("table", "csv"), help="default table, or the report_format setting")
     p.add_argument("-o", "--output")
     p = add_command(report, "balances", cmd_report_balances, "account balances at both ends of a period, and what moved the money")
     p.add_argument("--period", required=True, help="2025, 2025-Q2, 2025-03 or 2025-01-15..2025-02-20")
     p.add_argument("--business", help="default: every business")
-    p.add_argument("--format", choices=("table", "csv"), default="table")
+    p.add_argument("--format", choices=("table", "csv"), help="default table, or the report_format setting")
     p.add_argument("-o", "--output")
     p = add_command(report, "schedule-c", cmd_report_schedule_c, "roll one tax year up to Schedule C lines")
     p.add_argument("--year", type=year_arg, required=True)
     p.add_argument("--lines-year", type=year_arg, help="use another year's form lines, for a year with no data file")
     p.add_argument("--business", help="default: every business")
     p.add_argument("--all-lines", action="store_true", help="show lines with nothing on them too")
-    p.add_argument("--format", choices=("table", "csv"), default="table")
+    p.add_argument("--format", choices=("table", "csv"), help="default table, or the report_format setting")
     p.add_argument("-o", "--output")
     p = add_command(report, "preparer", cmd_report_preparer, "write a folder of CSV files for a tax preparer")
     p.add_argument("--year", type=year_arg, required=True)
