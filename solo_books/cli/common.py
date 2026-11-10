@@ -95,8 +95,8 @@ def attach_negative_amounts(argv: List[str]) -> List[str]:
 
 # Shared by the commands
 
-def deliver(text: str, output: Optional[str]) -> None:
-    render.deliver(text, output)
+def deliver(text: str, output: Optional[str], byte_order_mark: bool = True) -> None:
+    render.deliver(text, output, byte_order_mark)
     if output:
         print(f"Wrote {output}")
 

@@ -53,9 +53,14 @@ def csv_text(headers: Sequence[str], rows: Iterable[Sequence[str]]) -> str:
     return out.getvalue()
 
 
-def deliver(text: str, output: Optional[str]) -> None:
-    """Write to a file (with a byte order mark so spreadsheets read accents right) or to the screen."""
-    if output:
+def deliver(text: str, output: Optional[str], byte_order_mark: bool = True) -> None:
+    """Write to a file (with a byte order mark so spreadsheets read accents right) or to the screen.
+
+    JSON readers refuse a byte order mark, so formats like that pass byte_order_mark=False.
+    """
+    if output and not byte_order_mark:
+        write_atomic(Path(output), text.encode("utf-8"))
+    elif output:
         write_atomic(Path(output), ("\ufeff" + text).encode("utf-8"))
     else:
         sys.stdout.write(text if text.endswith("\n") else text + "\n")

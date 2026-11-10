@@ -15,6 +15,7 @@ from . import (
     budgeting,
     businesses,
     categorization_rules,
+    exporting,
     history_log,
     importing,
     payee_directory,
@@ -40,6 +41,7 @@ AREAS = (
     reconciling,
     reporting,
     budgeting,
+    exporting,
     history_log,
     web_page,
 )

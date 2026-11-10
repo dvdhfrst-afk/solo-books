@@ -75,6 +75,15 @@ To add an address, write its handler in a module in `solo_books/web/` and mark i
 A handler raises `BooksError` for a request it cannot answer. A new module must be imported in
 `solo_books/web/__init__.py`, since that is what registers its handlers.
 
+## Adding a report format or a journal format
+
+A report format is one module in `solo_books/formats/` holding a `Format` subclass and a `FORMAT` instance. Add the
+module to `_MODULES` in `solo_books/formats/__init__.py` and every report's `--format` offers it. A journal format is
+a module in `solo_books/journal/` with `NAME`, `HELP`, `BYTE_ORDER_MARK` and a `render(journal)` function that writes
+the entries `entries.py` builds, added to `_MODULES` in `solo_books/journal/__init__.py`.
+[docs/EXPORTS.md](docs/EXPORTS.md) describes both, and every format must escape text from bank rows for wherever it
+will be read.
+
 ## Adding a tax year
 
 The README's section "A new tax year" has the steps. Take every line from the official form, and record the source and

@@ -140,3 +140,41 @@ The statement file carries one more line than the export: CITY PARKING GARAGE, -
 The books say 427.09 + 83.53 = 510.62 owed. The statement says 525.62. The difference is 15.00 more money out
 on the statement than in the books. Adding the missing -15.00 row makes it tie, and adds 15.00 to the
 books' Travel figure if booked there.
+
+## Cash flow, first quarter of 2025
+
+Money in and money out of each account, from the rows listed above.
+
+| Account | Money in | Money out | Net |
+|---|---|---|---|
+| A Checking | 4,250.00 + 3,100.50 + 4,250.00 + 1.37 = 11,601.87 | 1,062.00 + 937.25 + 2,674.47 = 4,673.72 | 6,928.15 |
+| A Card | 200.00 + 112.80 + 312.47 = 625.27 | 459.70 + 80.19 + 396.00 = 935.89 | -310.62 |
+| B Checking | 7,285.25 | 45.00 + 2,180.00 + 210.40 + 88.60 + 29.00 = 2,553.00 | 4,732.25 |
+
+Checking's money out by month: January 850.00 + 200.00 + 12.00, February 850.00 + 75.25 + 12.00, March 850.00 +
+1,500.00 + 312.47 + 12.00. The card's: January 18.40 + 6.25 + 6.25 + 16.00 + 412.80, February 16.00 + 64.19, March
+16.00 + 230.00 + 150.00.
+
+What moved Business A's money:
+
+| What | Money in | Money out | Net |
+|---|---|---|---|
+| Income and costs | 11,601.87 + 112.80 = 11,714.67 | 2,661.25 + 935.89 = 3,597.14 | 8,117.53, the net profit |
+| Owner money | 0.00 | 1,500.00 | -1,500.00 |
+| Transfers | 200.00 + 312.47 = 512.47 | 512.47 | 0.00 |
+
+The checking costs are rent 2,550.00, fees 36.00 and the license 75.25. The three nets add to 6,617.53, which is
+checking's 6,928.15 less the card's 310.62.
+
+## Categories, first quarter of 2025
+
+| Category | Rows | Total | Average | Largest row |
+|---|---|---|---|---|
+| 4000 Sales | 3 | 11,600.50 | 11,600.50 / 3 = 3,866.83 | 4,250.00 |
+| 6105 Office rent | 3 | 2,550.00 | 850.00 | 850.00 |
+| 6140 Travel | 3 | 412.80 - 112.80 + 230.00 = 530.00 | 530.00 / 3 = 176.67 | 412.80 |
+| 6150 Meals | 3 | 30.90 | 10.30 | 18.40 |
+| 3900 Transfer | 4 | -200.00 + 200.00 - 312.47 + 312.47 = 0.00 | 0.00 | |
+| 4100 Returns and allowances (Business B) | 1 | -45.00 | -45.00 | -45.00 |
+
+A third of a cent rounds to the nearest cent. Returns reduce income, so they read as negative, as in profit and loss.
