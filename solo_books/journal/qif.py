@@ -3,6 +3,9 @@
 QIF is single-entry: each record is one amount on one account, with a category. A category of a business is written
 "Business:Category", and the clearing and uncategorized accounts are written in brackets, which QIF reads as a move
 to another account. QIF has no comments, so what produced the file is said in each account's description line.
+
+A payee with a name of its own is the record's payee, and the bank's text goes in the memo. QIF has no tags either,
+so they go in the memo too, as "Tags: Harbor Lane, Spring".
 """
 from __future__ import annotations
 
@@ -36,8 +39,10 @@ def _record(entry: Entry) -> List[str]:
     lines = [f"D{entry.day.strftime('%m/%d/%Y')}", f"T{plain_cents(entry.amount)}"]
     if entry.status == "reconciled":
         lines.append("CX")
-    lines.append(f"P{one_line(entry.description)}")
-    memo = "; ".join(one_line(text) for text in (entry.memo, entry.note) if text)
+    lines.append(f"P{one_line(entry.payee if entry.named else entry.description)}")
+    bank_text = f"Bank text: {entry.description}" if entry.named else ""
+    tag_text = f"Tags: {', '.join(entry.tags)}" if entry.tags else ""
+    memo = "; ".join(one_line(text) for text in (entry.memo, entry.note, bank_text, tag_text) if text)
     if memo:
         lines.append(f"M{memo}")
     if entry.other.role == "opening":

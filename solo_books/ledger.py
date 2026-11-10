@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import date
-from typing import Iterable, List, Optional, Sequence
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 from . import history
 from .books import require_usable
@@ -279,6 +279,13 @@ def uncategorize(conn: sqlite3.Connection, transaction_ids: Iterable[int]) -> in
                 {"category": None}, changes,
             )
     return len(changes)
+
+
+def tag_filter(tag_id: Optional[int], alias: str = "t") -> Tuple[str, list]:
+    """SQL that keeps only the rows carrying a tag, and its parameter. No tag keeps every row."""
+    if tag_id is None:
+        return "", []
+    return f" AND {alias}.id IN (SELECT transaction_id FROM transaction_tags WHERE tag_id = ?)", [tag_id]
 
 
 def set_note(conn: sqlite3.Connection, transaction_id: int, note: str) -> None:

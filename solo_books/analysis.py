@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 
 from .books import list_accounts
 from .errors import BooksError
+from .ledger import tag_filter
 from .periods import Period, check_year, parse_iso_date, split_period
 from .reports import Pnl, figure, profit_and_loss
 
@@ -129,8 +130,11 @@ def _bucket_of(buckets: List[Period], day: date) -> int:
     raise AssertionError(f"{day} is outside the report period")
 
 
-def cashflow(conn: sqlite3.Connection, business: sqlite3.Row, period: Period, by: str = "total") -> Cashflow:
-    """Money in and out of each account, and what moved it, from the bank rows alone."""
+def cashflow(
+    conn: sqlite3.Connection, business: sqlite3.Row, period: Period, by: str = "total", tag_id: Optional[int] = None
+) -> Cashflow:
+    """Money in and out of each account, and what moved it, from the bank rows alone. With a tag, its rows only."""
+    tagged, tag_params = tag_filter(tag_id)
     buckets = split_period(period, by)
     size = len(buckets)
     accounts = {account["id"]: _empty_line(account["name"], size, account["kind"]) for account in list_accounts(conn, business["id"])}
@@ -140,8 +144,8 @@ def cashflow(conn: sqlite3.Connection, business: sqlite3.Row, period: Period, by
     rows = conn.execute(
         "SELECT t.account_id, t.posted_on, t.amount_cents, c.kind FROM transactions t"
         " JOIN accounts a ON a.id = t.account_id LEFT JOIN categories c ON c.id = t.category_id"
-        " WHERE a.business_id = ? AND t.posted_on BETWEEN ? AND ?",
-        (business["id"], period.start.isoformat(), period.end.isoformat()),
+        " WHERE a.business_id = ? AND t.posted_on BETWEEN ? AND ?" + tagged,
+        (business["id"], period.start.isoformat(), period.end.isoformat(), *tag_params),
     ).fetchall()
     for row in rows:
         index = _bucket_of(buckets, parse_iso_date(row["posted_on"]))
@@ -151,7 +155,7 @@ def cashflow(conn: sqlite3.Connection, business: sqlite3.Row, period: Period, by
     warnings: List[str] = []
     if waiting.rows:
         warnings.append(f"{waiting.rows} row(s) are waiting for review. Their money is shown on its own line. Run 'review'.")
-    if purposes["transfer"].total_net:
+    if purposes["transfer"].total_net and tag_id is None:
         warnings.append(
             "Transfers do not net to zero. Each move should show on both accounts, so one side is missing, "
             "is booked to something else, or is in another business's account."
@@ -204,16 +208,17 @@ def parse_years(text: str) -> List[int]:
     return list(range(first, last + 1))
 
 
-def trend(conn: sqlite3.Connection, business: sqlite3.Row, years: List[int]) -> Trend:
+def trend(conn: sqlite3.Connection, business: sqlite3.Row, years: List[int], tag_id: Optional[int] = None) -> Trend:
     period = Period(date(years[0], 1, 1), date(years[-1], 12, 31), f"{years[0]}..{years[-1]}")
-    pnl = profit_and_loss(conn, business, period, "year")
+    pnl = profit_and_loss(conn, business, period, "year", tag_id)
+    tagged, tag_params = tag_filter(tag_id)
     counts: Dict[int, int] = {
         int(row[0]): row[1]
         for row in conn.execute(
             "SELECT substr(t.posted_on, 1, 4), COUNT(*) FROM transactions t JOIN accounts a ON a.id = t.account_id"
-            " WHERE a.business_id = ? AND t.category_id IS NULL AND t.posted_on BETWEEN ? AND ?"
-            " GROUP BY substr(t.posted_on, 1, 4)",
-            (business["id"], period.start.isoformat(), period.end.isoformat()),
+            " WHERE a.business_id = ? AND t.category_id IS NULL AND t.posted_on BETWEEN ? AND ?" + tagged
+            + " GROUP BY substr(t.posted_on, 1, 4)",
+            (business["id"], period.start.isoformat(), period.end.isoformat(), *tag_params),
         )
     }
     return Trend(business["name"], years, pnl, [counts.get(year, 0) for year in years])
@@ -254,12 +259,15 @@ def _as_read(kind: Optional[str], amount_cents: int) -> int:
     return figure(kind, amount_cents) if kind in ("cogs", "expense") else amount_cents
 
 
-def category_stats(conn: sqlite3.Connection, business: sqlite3.Row, period: Period) -> CategoryStats:
+def category_stats(
+    conn: sqlite3.Connection, business: sqlite3.Row, period: Period, tag_id: Optional[int] = None
+) -> CategoryStats:
+    tagged, tag_params = tag_filter(tag_id)
     rows = conn.execute(
         "SELECT t.id, t.posted_on, t.amount_cents, t.description, c.id AS category_id, c.code, c.name, c.kind"
         " FROM transactions t JOIN accounts a ON a.id = t.account_id LEFT JOIN categories c ON c.id = t.category_id"
-        " WHERE a.business_id = ? AND t.posted_on BETWEEN ? AND ? ORDER BY t.posted_on, t.id",
-        (business["id"], period.start.isoformat(), period.end.isoformat()),
+        " WHERE a.business_id = ? AND t.posted_on BETWEEN ? AND ?" + tagged + " ORDER BY t.posted_on, t.id",
+        (business["id"], period.start.isoformat(), period.end.isoformat(), *tag_params),
     ).fetchall()
     found: Dict[Optional[int], CategoryStat] = {}
     largest_raw: Dict[Optional[int], int] = {}
@@ -282,7 +290,7 @@ def category_stats(conn: sqlite3.Connection, business: sqlite3.Row, period: Peri
     ordered = sorted(found.values(), key=lambda s: (KIND_ORDER.index(s.kind), s.code))
     result = CategoryStats(business["name"], period, ordered, waiting)
     net = sum(s.total if s.kind in ("income", "returns") else -s.total for s in ordered if s.kind in KIND_ORDER[:4])
-    expected = profit_and_loss(conn, business, period).net[0]
+    expected = profit_and_loss(conn, business, period, tag_id=tag_id).net[0]
     if net != expected:
         raise AssertionError(f"category totals for {business['name']} ({net}) do not tie to profit and loss ({expected})")
     return result

@@ -7,14 +7,14 @@ needs no knowledge of any one report.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Set, Union
+from typing import Callable, List, Optional, Set, Union
 
 from .. import __version__
 from ..money import plain_cents
 from ..periods import Period
 
 # Every report, in the order help text lists them.
-REPORT_KINDS = ("pnl", "balances", "schedule-c", "cashflow", "trend", "categories")
+REPORT_KINDS = ("pnl", "balances", "schedule-c", "cashflow", "trend", "categories", "budget", "payees", "contractors")
 
 GENERATOR = f"solo-books {__version__}"
 
@@ -23,9 +23,11 @@ GENERATOR = f"solo-books {__version__}"
 class Report:
     """One report for one or more businesses, worked out and ready to render.
 
-    parts holds one result per business: Pnl, Balances, ScheduleC, Cashflow, Trend or CategoryStats.
+    parts holds one result per business: Pnl, Balances, ScheduleC, Cashflow, Trend, CategoryStats, BudgetReport,
+    PayeeReport or ContractorReport.
     period is the stretch of time asked for, used by the all-businesses summary where there is one.
-    tag names the tag the rows were limited to, when they were.
+    tag names the tag the rows were limited to, when they were. limit is how many payees each way the payees
+    report lists. show_date writes a date for a person to read; machine formats ignore it and keep ISO dates.
     """
 
     kind: str
@@ -33,6 +35,8 @@ class Report:
     period: Optional[Period] = None
     all_lines: bool = False
     tag: Optional[str] = None
+    limit: int = 10
+    show_date: Callable[[object], str] = str
 
     @property
     def only(self) -> str:

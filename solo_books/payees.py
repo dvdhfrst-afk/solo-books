@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Tuple
 from . import history
 from .db import transaction
 from .errors import BooksError
+from .ledger import tag_filter
 from .periods import Period
 from .text import clean_cell, normalize_description
 
@@ -276,14 +277,20 @@ class PayeeReport:
     left_out_count: int
 
 
-def payee_report(conn: sqlite3.Connection, business: sqlite3.Row, period: Period) -> PayeeReport:
-    """Booked money per payee over a period. Transfers and owner money are not payments to anyone, so they are left out."""
+def payee_report(
+    conn: sqlite3.Connection, business: sqlite3.Row, period: Period, tag_id: Optional[int] = None
+) -> PayeeReport:
+    """Booked money per payee over a period. Transfers and owner money are not payments to anyone, so they are left out.
+
+    With a tag, only its rows count.
+    """
     found = directory(conn, business["id"])
+    tagged, tag_params = tag_filter(tag_id)
     rows = conn.execute(
         "SELECT t.merchant, t.amount_cents, a.kind AS account_kind, c.kind AS category_kind"
         " FROM transactions t JOIN accounts a ON a.id = t.account_id LEFT JOIN categories c ON c.id = t.category_id"
-        " WHERE a.business_id = ? AND t.posted_on BETWEEN ? AND ?",
-        (business["id"], period.start.isoformat(), period.end.isoformat()),
+        " WHERE a.business_id = ? AND t.posted_on BETWEEN ? AND ?" + tagged,
+        (business["id"], period.start.isoformat(), period.end.isoformat(), *tag_params),
     ).fetchall()
     totals: Dict[str, PayeeTotal] = {}
     waiting_count = waiting_in = waiting_out = left_out = 0
@@ -315,6 +322,15 @@ def top(report: PayeeReport, direction: str, limit: int) -> List[PayeeTotal]:
     key = (lambda entry: entry.money_out) if direction == "out" else (lambda entry: entry.money_in)
     chosen = [entry for entry in report.totals if key(entry) > 0]
     return sorted(chosen, key=lambda entry: (-key(entry), entry.payee.name.lower()))[:limit]
+
+
+CONTRACTORS_NOTICE_LINES = (
+    "This is a bookkeeping list to hand your preparer. It is not a determination of who needs",
+    "an information return or any other form; your preparer decides that.",
+)
+CONTRACTORS_NOTICE = " ".join(CONTRACTORS_NOTICE_LINES)
+# The preparer folder divides its list of flagged payees here too.
+DEFAULT_THRESHOLD = "600.00"
 
 
 @dataclass

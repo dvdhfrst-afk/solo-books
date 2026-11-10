@@ -2,6 +2,9 @@
 
 Ledger has no way to escape text, so anything that would change how a line reads is replaced instead: a semicolon
 would start a comment, two spaces would end an account name, and a colon inside a name would split it.
+
+A payee with a name of its own heads the transaction, and the bank's text follows on a comment line. Tags go on a
+Ledger tag line, :Spring:Harbor_Lane:, with spaces as underscores and colons left out.
 """
 from __future__ import annotations
 
@@ -27,6 +30,11 @@ def payee(text: str) -> str:
     return one_line(text.replace(";", ",")) or "No description"
 
 
+def tag_line(names: List[str]) -> str:
+    parts = [part for part in (one_line(name.replace(":", " ")).replace(" ", "_") for name in names) if part]
+    return f":{':'.join(parts)}:" if parts else ""
+
+
 def amount(cents: int) -> str:
     return f"${plain_cents(cents)}"
 
@@ -40,7 +48,12 @@ def render(journal: Journal) -> str:
     for entry in journal.entries:
         code = f"({entry.transaction_id}) " if entry.transaction_id is not None else ""
         lines.append("")
-        lines.append(f"{entry.day.strftime('%Y/%m/%d')} {_FLAGS[entry.status]}{code}{payee(entry.description)}")
+        heading = entry.payee if entry.named else entry.description
+        lines.append(f"{entry.day.strftime('%Y/%m/%d')} {_FLAGS[entry.status]}{code}{payee(heading)}")
+        if entry.named:
+            lines.append(f"    ; Bank text: {one_line(entry.description)}")
+        if tag_line(entry.tags):
+            lines.append(f"    ; {tag_line(entry.tags)}")
         if entry.memo:
             lines.append(f"    ; Memo: {one_line(entry.memo)}")
         if entry.note:

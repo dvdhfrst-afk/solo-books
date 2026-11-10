@@ -63,7 +63,7 @@ def cmd_payee_show(args, conn) -> int:
             ["Id", "Date", "Account", "Amount", "Description", "Category"],
             [
                 [
-                    str(row["id"]), row["posted_on"], row["account_name"], format_cents(row["amount_cents"]),
+                    str(row["id"]), args.settings.show_date(row["posted_on"]), row["account_name"], format_cents(row["amount_cents"]),
                     row["description"], f"{row['category_code']} {row['category_name']}" if row["category_code"] else "-",
                 ]
                 for row in recent

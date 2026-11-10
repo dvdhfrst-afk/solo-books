@@ -36,7 +36,7 @@ def pnl_csv_rows(pnl, only: str) -> List[List[str]]:
     return rows
 
 
-def cashflow_csv_rows(part) -> List[List[str]]:
+def cashflow_csv_rows(part, only: str = "") -> List[List[str]]:
     rows: List[List[str]] = []
 
     def add(index: int, section: str, line) -> None:
@@ -55,7 +55,7 @@ def cashflow_csv_rows(part) -> List[List[str]]:
             add(index, "what moved it", purpose)
         if part.waiting:
             add(index, "what moved it", part.waiting)
-    for note in [*part.warnings, NOT_ADVICE]:
+    for note in [*([only] if only else []), *part.warnings, NOT_ADVICE]:
         rows.append([part.business, part.period.label, part.period.start.isoformat(), part.period.end.isoformat(), "note", note, "", "", ""])
     return rows
 
@@ -93,11 +93,13 @@ def trend_csv(report: Report) -> str:
         for year, count in zip(part.years, part.waiting):
             if count:
                 rows.append([part.business, "note", "", f"{count} uncategorized rows in {year} are not in these figures", *blank])
+        if report.only:
+            rows.append([part.business, "note", "", report.only, *blank])
         rows.append([part.business, "note", "", NOT_ADVICE, *blank])
     return render.csv_text(headers, rows)
 
 
-def categories_csv_rows(part) -> List[List[str]]:
+def categories_csv_rows(part, only: str = "") -> List[List[str]]:
     rows: List[List[str]] = []
     start, end = part.period.start.isoformat(), part.period.end.isoformat()
     for stat in part.categories + ([part.waiting] if part.waiting else []):
@@ -106,7 +108,8 @@ def categories_csv_rows(part) -> List[List[str]]:
             plain_cents(stat.total), plain_cents(stat.average), plain_cents(stat.largest_amount), stat.largest_on,
             str(stat.largest_id), spreadsheet_safe(stat.largest_description),
         ])
-    rows.append([part.business, start, end, "", NOT_ADVICE, "note", *[""] * 7])
+    for note in [*([only] if only else []), NOT_ADVICE]:
+        rows.append([part.business, start, end, "", note, "note", *[""] * 7])
     return rows
 
 
@@ -124,10 +127,18 @@ class CsvFormat(Format):
         if kind == "schedule-c":
             return render.csv_text(render.SCHEDULE_CSV_HEADERS, _rows_for(report, render.schedule_c_csv_rows))
         if kind == "cashflow":
-            return render.csv_text(CASHFLOW_CSV_HEADERS, _rows_for(report, cashflow_csv_rows))
+            return render.csv_text(CASHFLOW_CSV_HEADERS, _rows_for(report, lambda part: cashflow_csv_rows(part, report.only)))
         if kind == "trend":
             return trend_csv(report)
-        return render.csv_text(CATEGORIES_CSV_HEADERS, _rows_for(report, categories_csv_rows))
+        if kind == "categories":
+            return render.csv_text(CATEGORIES_CSV_HEADERS, _rows_for(report, lambda part: categories_csv_rows(part, report.only)))
+        if kind == "payees":
+            return render.csv_text(
+                render.PAYEES_CSV_HEADERS, _rows_for(report, lambda part: render.payees_csv_rows(part, report.limit, report.only))
+            )
+        if kind == "contractors":
+            return render.csv_text(render.CONTRACTORS_CSV_HEADERS, _rows_for(report, render.contractors_csv_rows))
+        return render.csv_text(render.BUDGET_CSV_HEADERS, _rows_for(report, lambda part: render.budget_csv_rows(part, report.only)))
 
 
 FORMAT = CsvFormat()

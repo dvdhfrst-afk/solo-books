@@ -21,7 +21,7 @@ def cmd_reconcile_run(args, conn) -> int:
         Path(args.statement) if args.statement else None,
         args.skip_bad,
     )
-    print(render.reconcile_text(report))
+    print(render.reconcile_text(report, args.settings.show_date))
     return 0 if report.balanced else 1
 
 
@@ -29,14 +29,15 @@ def cmd_reconcile_show(args, conn) -> int:
     report = reconcile.compute(
         conn, reconcile.get(conn, args.id), Path(args.statement) if args.statement else None, args.skip_bad
     )
-    print(render.reconcile_text(report))
+    print(render.reconcile_text(report, args.settings.show_date))
     return 0 if report.balanced else 1
 
 
 def cmd_reconcile_finish(args, conn) -> int:
     report = reconcile.finish(conn, args.id)
     print(
-        f"Reconciliation {args.id} finished: {report.account['name']}, {report.start} to {report.end}, "
+        f"Reconciliation {args.id} finished: {report.account['name']}, {args.settings.show_date(report.start)} to "
+        f"{args.settings.show_date(report.end)}, "
         f"{report.row_count} rows locked."
     )
     return 0

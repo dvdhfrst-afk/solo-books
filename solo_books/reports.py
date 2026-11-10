@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 
 from .books import get_inventory, list_accounts
 from .errors import BooksError
-from .ledger import balance_through
+from .ledger import balance_through, tag_filter
 from .money import format_cents
 from .periods import Period, parse_iso_date, split_period, year_period
 from .schedule_c import Form, line_label, load_form
@@ -99,13 +99,13 @@ def profit_and_loss(
 ) -> Pnl:
     """With a tag, only the rows carrying it count, and the queue's figures are those rows' too."""
     buckets = split_period(period, by)
-    tagged = " AND t.id IN (SELECT transaction_id FROM transaction_tags WHERE tag_id = ?)" if tag_id is not None else ""
+    tagged, tag_params = tag_filter(tag_id)
     rows = conn.execute(
         "SELECT t.posted_on, t.amount_cents, c.id AS category_id, c.code, c.name, c.kind"
         " FROM transactions t JOIN accounts a ON a.id = t.account_id"
         " LEFT JOIN categories c ON c.id = t.category_id"
         " WHERE a.business_id = ? AND t.posted_on BETWEEN ? AND ?" + tagged,
-        (business["id"], period.start.isoformat(), period.end.isoformat(), *([tag_id] if tag_id is not None else [])),
+        (business["id"], period.start.isoformat(), period.end.isoformat(), *tag_params),
     ).fetchall()
 
     off = OffReport()

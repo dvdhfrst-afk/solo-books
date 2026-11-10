@@ -256,6 +256,14 @@ class BudgetReport:
     off: OffReport
     warnings: List[str] = field(default_factory=list)
 
+    def sections(self) -> List[Tuple[str, str, List[BudgetLine], str, Tuple[int, int]]]:
+        """Each section's name, heading, lines, total label and total, in the order profit and loss shows them."""
+        found = [("income", "INCOME", self.income, "Total income", self.total_income)]
+        if self.cogs:
+            found.append(("cost of goods sold", "COST OF GOODS SOLD", self.cogs, "Total cost of goods sold", self.total_cogs))
+        found.append(("expense", "EXPENSES", self.expenses, "Total expenses", self.total_expenses))
+        return found
+
     @staticmethod
     def _sum(lines: List[BudgetLine]) -> Tuple[int, int]:
         return sum(line.budget for line in lines), sum(line.actual for line in lines)
@@ -278,10 +286,15 @@ class BudgetReport:
         return income[0] - cogs[0] - expenses[0], income[1] - cogs[1] - expenses[1]
 
 
-def budget_report(conn: sqlite3.Connection, business: sqlite3.Row, period: Period) -> BudgetReport:
-    """Budget against the books for a year, quarter or month. Actual figures are the profit and loss figures."""
+def budget_report(
+    conn: sqlite3.Connection, business: sqlite3.Row, period: Period, tag_id: Optional[int] = None
+) -> BudgetReport:
+    """Budget against the books for a year, quarter or month. Actual figures are the profit and loss figures.
+
+    With a tag, the actual figures are that tag's rows, set against the whole budget.
+    """
     planned = budget_for_period(conn, business["id"], period)
-    pnl = profit_and_loss(conn, business, period)
+    pnl = profit_and_loss(conn, business, period, tag_id=tag_id)
     actual = {row.code: row.total for row in pnl.income + pnl.returns + pnl.cogs + pnl.expenses}
     lines: Dict[str, List[BudgetLine]] = {"income": [], "cogs": [], "expense": []}
     for category in list_categories(conn, business["id"], include_retired=True):

@@ -17,7 +17,9 @@ from tests.helpers import BooksCase, build_worked_books, worked_expected
 
 LEDGER_HEADER = re.compile(r"^(\d{4})/(\d{2})/(\d{2}) (?:([*!]) )?(?:\((\d+)\) )?(.+)$")
 LEDGER_POSTING = re.compile(r"^    (\S(?:\S| (?! ))*)  +\$(-?\d+)\.(\d{2})$")
-BEANCOUNT_HEADER = re.compile(r'^(\d{4}-\d{2}-\d{2}) ([*!]) "((?:[^"\\]|\\.)*)"$')
+BEANCOUNT_HEADER = re.compile(
+    r'^(\d{4}-\d{2}-\d{2}) ([*!]) "((?:[^"\\]|\\.)*)"(?: "((?:[^"\\]|\\.)*)")?((?: #[A-Za-z0-9_./-]+)*)$'
+)
 BEANCOUNT_POSTING = re.compile(r"^  ([A-Z][A-Za-z0-9-]*(?::[A-Z0-9][A-Za-z0-9-]*)+) +(-?\d+)\.(\d{2}) USD$")
 BEANCOUNT_META = re.compile(r'^  ([a-z][a-z_]*): (.+)$')
 
@@ -69,8 +71,12 @@ def read_beancount(text: str) -> Tuple[List[dict], Dict[str, str], List[Tuple[st
             continue
         header = BEANCOUNT_HEADER.match(line)
         if header:
-            narration = re.sub(r"\\(.)", r"\1", header.group(3))
-            transactions.append({"date": header.group(1), "flag": header.group(2), "narration": narration, "postings": [], "meta": {}})
+            first, second = (re.sub(r"\\(.)", r"\1", text) if text is not None else None for text in header.group(3, 4))
+            payee, narration = (first, second) if second is not None else (None, first)
+            transactions.append({
+                "date": header.group(1), "flag": header.group(2), "payee": payee, "narration": narration,
+                "tags": header.group(5).split(), "postings": [], "meta": {},
+            })
             continue
         meta = BEANCOUNT_META.match(line)
         if meta and transactions and not transactions[-1]["postings"]:
@@ -334,3 +340,52 @@ class AccountsOpenedLater(JournalCase):
         self.assertIn("not a period", self.fails("export", "journal", "--format", "ledger", "--period", "soon", "-o", str(self.dir / "x")))
         code, _, _ = self.run_cli("export", "journal", "--format", "gnucash", "--period", "2025", "-o", str(self.dir / "x"))
         self.assertEqual(code, 2)
+
+
+class PayeesAndTags(JournalCase):
+    """A payee's own name and a row's tags reach every journal format."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.biz = self.business()
+        self.acct = self.account(self.biz, opening=10000)
+        meals = self.category(self.biz, "6150")
+        self.lunch = ledger.add_manual(self.conn, self.acct, date(2025, 1, 2), -450, "BLUE FERN CAFE", meals)
+        self.plain = ledger.add_manual(self.conn, self.acct, date(2025, 1, 3), -300, "HARDWARE BARN", meals)
+        self.ok("payee", "rename", "BLUE FERN CAFE", "Blue Fern", "--business", "Business A")
+        self.ok("tag", "add", "Harbor Lane", str(self.lunch))
+        self.ok("tag", "add", "Spring", str(self.lunch))
+
+    def test_ledger(self) -> None:
+        transactions = {t["id"]: t for t in read_ledger(self.export("ledger")) if t["id"] is not None}
+        self.assertEqual(transactions[self.lunch]["payee"], "Blue Fern")
+        self.assertEqual(transactions[self.lunch]["comments"], ["Bank text: BLUE FERN CAFE", ":Harbor_Lane:Spring:"])
+        self.assertEqual((transactions[self.plain]["payee"], transactions[self.plain]["comments"]), ("HARDWARE BARN", []))
+
+    def test_beancount(self) -> None:
+        transactions, _, _ = read_beancount(self.export("beancount"))
+        found = {int(t["meta"]["solo_books_id"]): t for t in transactions if "solo_books_id" in t["meta"]}
+        lunch, plain = found[self.lunch], found[self.plain]
+        self.assertEqual((lunch["payee"], lunch["narration"], lunch["tags"]), ("Blue Fern", "BLUE FERN CAFE", ["#Harbor-Lane", "#Spring"]))
+        self.assertEqual((plain["payee"], plain["narration"], plain["tags"]), (None, "HARDWARE BARN", []))
+
+    def test_qif(self) -> None:
+        records = read_qif(self.export("qif"))["A Checking"]
+        lunch = [r for r in records if r.get("P") == "Blue Fern"][0]
+        self.assertEqual(lunch["M"], "Bank text: BLUE FERN CAFE; Tags: Harbor Lane, Spring")
+        plain = [r for r in records if r.get("P") == "HARDWARE BARN"][0]
+        self.assertNotIn("M", plain)
+
+    def test_csv(self) -> None:
+        rows = list(csv.DictReader(io.StringIO(self.export("csv"))))
+        lunch = [r for r in rows if r["transaction_id"] == str(self.lunch)]
+        self.assertEqual(len(lunch), 2)
+        self.assertEqual({(r["payee"], r["tags"], r["description"]) for r in lunch}, {("Blue Fern", "Harbor Lane; Spring", "BLUE FERN CAFE")})
+        plain = [r for r in rows if r["transaction_id"] == str(self.plain)][0]
+        self.assertEqual((plain["payee"], plain["tags"]), ("HARDWARE BARN", ""))
+
+    def test_a_merged_spelling_takes_the_payee_it_joined(self) -> None:
+        self.ok("payee", "merge", "HARDWARE BARN", "Blue Fern", "--business", "Business A")
+        transactions = {t["id"]: t for t in read_ledger(self.export("ledger")) if t["id"] is not None}
+        self.assertEqual(transactions[self.plain]["payee"], "Blue Fern")
+        self.assertEqual(transactions[self.plain]["comments"], ["Bank text: HARDWARE BARN"])

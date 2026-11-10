@@ -171,6 +171,18 @@ def tags_of(conn: sqlite3.Connection, transaction_id: int) -> List[str]:
     ]
 
 
+def tags_by_row(conn: sqlite3.Connection, business_id: int) -> Dict[int, List[str]]:
+    """Every tagged row of a business and its tag names, in name order."""
+    found: Dict[int, List[str]] = {}
+    for row in conn.execute(
+        "SELECT tt.transaction_id, g.name FROM transaction_tags tt JOIN tags g ON g.id = tt.tag_id"
+        " WHERE g.business_id = ? ORDER BY tt.transaction_id, g.name",
+        (business_id,),
+    ):
+        found.setdefault(row[0], []).append(row[1])
+    return found
+
+
 def problems(conn: sqlite3.Connection) -> List[str]:
     """What 'check' reports about tags: a tag on another business's row, or a name no command would accept."""
     found: List[str] = []

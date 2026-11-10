@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List
 
-from .. import render
+from .. import budgets, payees, render
 from ..analysis import percent_change
 from ..money import format_cents
 from ..reports import Balances, Pnl, PnlRow
@@ -16,8 +16,8 @@ from .base import Document, Paragraph, Report, Section, Table
 CARD_NOTE = "On a card, money in pays down what is owed and money out adds to it."
 
 
-def _period_line(period) -> str:
-    return f"Period: {period.label} ({period.start} to {period.end}), cash basis"
+def _period_line(period, report: Report) -> str:
+    return render.period_line(period, report.show_date)
 
 
 def _notes(lines: List[str]) -> List[Paragraph]:
@@ -86,7 +86,7 @@ def _excluded_table(rows: List[PnlRow]) -> Table:
 def pnl_document(report: Report) -> Document:
     doc = Document("Profit and loss")
     for pnl in report.parts:
-        section = Section(f"Profit and loss: {pnl.business}", [_period_line(pnl.period), *([report.only] if report.only else [])])
+        section = Section(f"Profit and loss: {pnl.business}", [_period_line(pnl.period, report)])
         sections = _pnl_sections(pnl)
         # Returns sit under income with no heading of their own, as the text report has them.
         section.blocks.append(
@@ -120,7 +120,7 @@ def pnl_document(report: Report) -> Document:
 def balances_document(report: Report) -> Document:
     doc = Document("Balances")
     for part in report.parts:
-        section = Section(f"Balances: {part.business}", [_period_line(part.period)])
+        section = Section(f"Balances: {part.business}", [_period_line(part.period, report)])
         accounts = Table(["Account", "Kind", "Start", "End"], numeric={2, 3})
         for a in part.accounts:
             accounts.add([a.name, a.kind, format_cents(a.printed(a.begin)), format_cents(a.printed(a.end))])
@@ -134,7 +134,7 @@ def balances_document(report: Report) -> Document:
         section.blocks.append(moved)
         if part.inventory_end is not None:
             section.blocks.append(Paragraph(
-                f"Inventory count at {part.period.end}: {format_cents(part.inventory_end)} (from 'inventory set'). "
+                f"Inventory count at {report.show_date(part.period.end)}: {format_cents(part.inventory_end)} (from 'inventory set'). "
                 f"Money plus inventory: {format_cents(part.money_end + part.inventory_end)}."
             ))
         section.blocks.extend(Paragraph(w, warning=True) for w in part.warnings)
@@ -198,7 +198,7 @@ def _flow_cells(line, index: int) -> List[str]:
 def cashflow_document(report: Report) -> Document:
     doc = Document("Cash flow")
     for part in report.parts:
-        section = Section(f"Cash flow: {part.business}", [_period_line(part.period)])
+        section = Section(f"Cash flow: {part.business}", [_period_line(part.period, report)])
         table = Table(["Period", "", "Money in", "Money out", "Net"], numeric={2, 3, 4})
         indexes = list(range(len(part.buckets))) + ([-1] if len(part.buckets) > 1 else [])
         total = part.total
@@ -259,7 +259,7 @@ def trend_document(report: Report) -> Document:
 def categories_document(report: Report) -> Document:
     doc = Document("Categories")
     for part in report.parts:
-        section = Section(f"Categories: {part.business}", [_period_line(part.period)])
+        section = Section(f"Categories: {part.business}", [_period_line(part.period, report)])
         table = Table(["Code", "Category", "Rows", "Total", "Average", "Largest", "Row", "Largest row"], numeric={2, 3, 4, 5, 6})
         stats = part.categories + ([part.waiting] if part.waiting else [])
         for stat in stats:
@@ -272,7 +272,7 @@ def categories_document(report: Report) -> Document:
                     format_cents(stat.average),
                     format_cents(stat.largest_amount),
                     str(stat.largest_id),
-                    f"{stat.largest_on} {stat.largest_description}",
+                    f"{report.show_date(stat.largest_on)} {stat.largest_description}",
                 ],
                 "total" if stat is part.waiting else "",
             )
@@ -291,6 +291,91 @@ def categories_document(report: Report) -> Document:
     return doc
 
 
+# Budget
+
+def budget_document(report: Report) -> Document:
+    doc = Document("Budget")
+
+    def cells(label: str, budget: int, actual: int) -> List[str]:
+        used = budgets.percent_used(actual, budget) or "-"
+        return [label, format_cents(budget), format_cents(actual), format_cents(actual - budget), used]
+
+    for part in report.parts:
+        section = Section(f"Budget: {part.business}", [_period_line(part.period, report)])
+        table = Table(["", "Budget", "Actual", "Difference", "Used"], numeric={1, 2, 3, 4})
+        for _, title, lines, total_name, total in part.sections():
+            table.add([title, "", "", "", ""], "group")
+            for line in lines:
+                table.add(cells(f"  {line.code} {line.name}", line.budget, line.actual))
+            table.add(cells(total_name, *total), "total")
+        table.add(cells("NET PROFIT OR (LOSS)", *part.net), "total")
+        section.blocks.append(table)
+        section.blocks.append(Paragraph(render.BUDGET_DIFFERENCE))
+        section.blocks.extend(Paragraph(warning) for warning in part.warnings)
+        off = part.off
+        if off.uncategorized_count:
+            section.blocks.append(Paragraph(
+                render.waiting_text(off.uncategorized_count, off.uncategorized_in, off.uncategorized_out), warning=True
+            ))
+        doc.sections.append(section)
+    return doc
+
+
+# Payees and contractors
+
+def payees_document(report: Report) -> Document:
+    doc = Document("Payees")
+    limit = report.limit
+    for part in report.parts:
+        intro = ["Rows booked to income and expense categories, from every account."]
+        if part.left_out_count:
+            intro.append(f"{part.left_out_count} transfer and owner row(s) are not payments to anyone and are left out.")
+        section = Section(f"Payees: {part.business}, {part.period.label}", intro)
+        money_out = Table(["#", "Payee", "Rows", "Money out", "By card", "Money in"], numeric={0, 2, 3, 4, 5})
+        for rank, e in enumerate(payees.top(part, "out", limit), start=1):
+            money_out.add([str(rank), e.payee.name, str(e.rows), *map(format_cents, (e.money_out, e.by_card, e.money_in))])
+        money_in = Table(["#", "Payee", "Rows", "Money in", "Money out"], numeric={0, 2, 3, 4})
+        for rank, e in enumerate(payees.top(part, "in", limit), start=1):
+            money_in.add([str(rank), e.payee.name, str(e.rows), format_cents(e.money_in), format_cents(e.money_out)])
+        section.blocks.extend([Paragraph(f"Money out, top {limit}:"), money_out, Paragraph(f"Money in, top {limit}:"), money_in])
+        if part.waiting_count:
+            section.blocks.append(Paragraph(render.waiting_text(part.waiting_count, part.waiting_in, part.waiting_out), warning=True))
+        doc.sections.append(section)
+    return doc
+
+
+def contractors_document(report: Report) -> Document:
+    doc = Document("Payments to contractors")
+    for part in report.parts:
+        section = Section(
+            f"Payments to contractors: {part.business}, {part.period.start.year}",
+            [
+                "Payees flagged with 'payee set NAME --contractor yes'. Net paid is money out less refunds, booked to "
+                "income and expense categories, from every account, cards included.",
+                payees.CONTRACTORS_NOTICE,
+            ],
+        )
+        threshold = format_cents(part.threshold)
+        if not part.flagged:
+            section.blocks.append(Paragraph("No payee of this business is flagged as a contractor."))
+        for heading, entries in (
+            (f"Net paid of {threshold} or more: {len(part.at_or_over)} payee(s)", part.at_or_over),
+            (f"Under {threshold}, or nothing paid this year: {len(part.under)} payee(s)", part.under),
+        ):
+            if not part.flagged:
+                break
+            section.blocks.append(Paragraph(heading))
+            if entries:
+                table = Table(list(render.CONTRACTOR_HEADERS), numeric={2, 3, 4, 5, 6})
+                for entry in entries:
+                    table.add(render.contractor_cells(entry))
+                section.blocks.append(table)
+        if part.waiting_count:
+            section.blocks.append(Paragraph(f"{render.contractors_waiting(part)} Run 'review'.", warning=True))
+        doc.sections.append(section)
+    return doc
+
+
 LAYOUTS: Dict[str, Callable[[Report], Document]] = {
     "pnl": pnl_document,
     "balances": balances_document,
@@ -298,8 +383,17 @@ LAYOUTS: Dict[str, Callable[[Report], Document]] = {
     "cashflow": cashflow_document,
     "trend": trend_document,
     "categories": categories_document,
+    "budget": budget_document,
+    "payees": payees_document,
+    "contractors": contractors_document,
 }
 
 
 def document(report: Report) -> Document:
-    return LAYOUTS[report.kind](report)
+    """The report laid out. A report limited to a tag says so under each business's heading."""
+    doc = LAYOUTS[report.kind](report)
+    if report.only:
+        for section in doc.sections:
+            if not section.heading.startswith("All businesses"):
+                section.intro.append(report.only)
+    return doc

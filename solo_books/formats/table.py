@@ -13,7 +13,7 @@ from .layout import document
 def _pnl(report: Report) -> str:
     parts = report.parts
     only = report.only
-    chunks = [f"{only}\n{render.pnl_text(pnl)}" if only else render.pnl_text(pnl) for pnl in parts]
+    chunks = [_tagged(only, render.pnl_text(pnl, report.show_date)) for pnl in parts]
     if len(parts) > 1:
         rows = [
             [
@@ -41,8 +41,12 @@ def _pnl(report: Report) -> str:
     return "\n\n".join(chunks)
 
 
+def _tagged(only: str, text: str) -> str:
+    return f"{only}\n{text}" if only else text
+
+
 def _balances(report: Report) -> str:
-    chunks = [render.balances_text(part) for part in report.parts]
+    chunks = [render.balances_text(part, report.show_date) for part in report.parts]
     if len(report.parts) > 1:
         chunks.append(render.balances_summary_text(report.parts))
     return "\n\n".join(chunks)
@@ -50,6 +54,18 @@ def _balances(report: Report) -> str:
 
 def _schedule_c(report: Report) -> str:
     return "\n\n".join(render.schedule_c_text(part, report.all_lines) for part in report.parts)
+
+
+def _payees(report: Report) -> str:
+    return "\n\n".join(_tagged(report.only, render.payees_text(part, report.limit)) for part in report.parts)
+
+
+def _contractors(report: Report) -> str:
+    return "\n\n".join(render.contractors_text(part) for part in report.parts)
+
+
+def _budget(report: Report) -> str:
+    return "\n\n".join(_tagged(report.only, render.budget_text(part, report.show_date)) for part in report.parts)
 
 
 def _table_text(block: Table) -> str:
@@ -71,8 +87,11 @@ def document_text(doc: Document) -> str:
     return "\n\n".join(chunks)
 
 
-# The first three reports keep the exact text they have always had.
-_TEXT = {"pnl": _pnl, "balances": _balances, "schedule-c": _schedule_c}
+# These reports keep the exact text they have always had.
+_TEXT = {
+    "pnl": _pnl, "balances": _balances, "schedule-c": _schedule_c, "payees": _payees, "contractors": _contractors,
+    "budget": _budget,
+}
 
 
 class TableFormat(Format):

@@ -8,7 +8,9 @@ from __future__ import annotations
 import json
 from typing import Callable, Dict, List
 
+from .. import payees
 from ..analysis import percent_change
+from ..budgets import percent_used
 from ..reports import NOT_ADVICE, PnlRow
 from ..render import _PART_TITLES, _schedule_notes
 from .base import GENERATOR, Format, Report, money, period_json
@@ -194,7 +196,7 @@ def _cashflow(report: Report) -> dict:
             "waiting_for_review": _flow(part.waiting) if part.waiting else None,
             "warnings": list(part.warnings),
         })
-    result = {"period": period_json(report.period), "businesses": businesses}
+    result = {"period": period_json(report.period), "tag": report.tag, "businesses": businesses}
     if len(report.parts) > 1:
         totals = [p.total for p in report.parts]
         result["all_businesses"] = {
@@ -236,7 +238,7 @@ def _trend(report: Report) -> dict:
             "totals": totals,
             "uncategorized_rows": dict(zip((str(y) for y in part.years), part.waiting)),
         })
-    return {"years": report.parts[0].years, "businesses": businesses}
+    return {"years": report.parts[0].years, "tag": report.tag, "businesses": businesses}
 
 
 def _stat(stat) -> dict:
@@ -266,7 +268,88 @@ def _categories(report: Report) -> dict:
         }
         for part in report.parts
     ]
-    return {"period": period_json(report.period), "businesses": businesses}
+    return {"period": period_json(report.period), "tag": report.tag, "businesses": businesses}
+
+
+def _budget_line(code: str, name: str, budget: int, actual: int) -> dict:
+    used = percent_used(actual, budget)
+    return {
+        "code": code or None,
+        "name": name,
+        "budget": money(budget),
+        "actual": money(actual),
+        "difference": money(actual - budget),
+        "percent_used": used.rstrip("%") if used else None,
+    }
+
+
+def _budget(report: Report) -> dict:
+    businesses = []
+    for part in report.parts:
+        sections = []
+        for section, _, lines, total_name, total in part.sections():
+            sections.append({
+                "section": section,
+                "categories": [_budget_line(line.code, line.name, line.budget, line.actual) for line in lines],
+                "total": _budget_line("", total_name, *total),
+            })
+        off = part.off
+        businesses.append({
+            "business": part.business,
+            "period": period_json(part.period),
+            "sections": sections,
+            "net": _budget_line("", "Net profit or (loss)", *part.net),
+            "uncategorized": _uncategorized(off.uncategorized_count, off.uncategorized_in, off.uncategorized_out),
+            "warnings": list(part.warnings),
+        })
+    return {"period": period_json(report.period), "tag": report.tag, "businesses": businesses}
+
+
+def _payee_total(entry: payees.PayeeTotal, rank: int = 0) -> dict:
+    shown = {"rank": rank} if rank else {}
+    shown.update({
+        "payee": entry.payee.name,
+        "spellings": list(entry.payee.merchants),
+        "contractor": entry.payee.contractor,
+        "rows": entry.rows,
+        "money_out": money(entry.money_out),
+        "money_in": money(entry.money_in),
+        "net_paid": money(entry.net_paid),
+        "paid_by_card": money(entry.by_card),
+    })
+    return shown
+
+
+def _payees(report: Report) -> dict:
+    businesses = [
+        {
+            "business": part.business,
+            "period": period_json(part.period),
+            "money_out": [_payee_total(e, rank) for rank, e in enumerate(payees.top(part, "out", report.limit), start=1)],
+            "money_in": [_payee_total(e, rank) for rank, e in enumerate(payees.top(part, "in", report.limit), start=1)],
+            "transfer_and_owner_rows_left_out": part.left_out_count,
+            "uncategorized": _uncategorized(part.waiting_count, part.waiting_in, part.waiting_out),
+        }
+        for part in report.parts
+    ]
+    return {"period": period_json(report.period), "tag": report.tag, "limit": report.limit, "businesses": businesses}
+
+
+def _contractors(report: Report) -> dict:
+    businesses = [
+        {
+            "business": part.business,
+            "threshold": money(part.threshold),
+            "flagged": part.flagged,
+            "at_or_over": [_payee_total(e) for e in part.at_or_over],
+            "under": [_payee_total(e) for e in part.under],
+            "waiting_for_review": {"count": part.waiting_count, "money_out": money(part.waiting_out)},
+        }
+        for part in report.parts
+    ]
+    return {
+        "tax_year": report.period.start.year, "notice": payees.CONTRACTORS_NOTICE, "businesses": businesses,
+    }
 
 
 _BODIES: Dict[str, Callable[[Report], dict]] = {
@@ -276,6 +359,9 @@ _BODIES: Dict[str, Callable[[Report], dict]] = {
     "cashflow": _cashflow,
     "trend": _trend,
     "categories": _categories,
+    "budget": _budget,
+    "payees": _payees,
+    "contractors": _contractors,
 }
 
 

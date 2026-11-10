@@ -3,6 +3,9 @@
 Beancount account names allow only letters, digits and hyphens, each part starting with a capital or a digit, so
 names are reduced to that. Descriptions are quoted strings with backslashes and quotes escaped. Each account opens on
 the first day of the journal, and a balance check on the day after it ends holds every account to the books.
+
+A payee with a name of its own is written as the transaction's payee, before the bank's text. Tags are Beancount
+tags on the transaction line, such as #Harbor-Lane, reduced to the characters a tag allows.
 """
 from __future__ import annotations
 
@@ -18,6 +21,7 @@ HELP = "a Beancount journal, with a balance check per account"
 BYTE_ORDER_MARK = False
 
 _NOT_IN_NAMES = re.compile(r"[^A-Za-z0-9]+")
+_NOT_IN_TAGS = re.compile(r"[^A-Za-z0-9_./-]+")
 
 
 def component(text: str) -> str:
@@ -29,6 +33,16 @@ def component(text: str) -> str:
 
 def quoted(text: str) -> str:
     return '"' + one_line(text).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def tag_marks(names: List[str]) -> str:
+    """Each tag as #name. Two names that reduce to the same tag are written once."""
+    marks: List[str] = []
+    for name in names:
+        mark = "#" + (_NOT_IN_TAGS.sub("-", name).strip("-") or "tag")
+        if mark not in marks:
+            marks.append(mark)
+    return "".join(f" {mark}" for mark in marks)
 
 
 def amount(cents: int) -> str:
@@ -45,7 +59,8 @@ def render(journal: Journal) -> str:
     for entry in journal.entries:
         flag = "!" if entry.status == "waiting" else "*"
         lines.append("")
-        lines.append(f"{entry.day.isoformat()} {flag} {quoted(entry.description)}")
+        text = f"{quoted(entry.payee)} {quoted(entry.description)}" if entry.named else quoted(entry.description)
+        lines.append(f"{entry.day.isoformat()} {flag} {text}{tag_marks(entry.tags)}")
         if entry.transaction_id is not None:
             lines.append(f"  solo_books_id: {entry.transaction_id}")
         if entry.status == "reconciled":

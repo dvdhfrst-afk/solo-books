@@ -14,6 +14,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
+from . import formats
 from .errors import BooksError
 from .files import write_atomic
 
@@ -112,11 +113,12 @@ SETTINGS: Tuple[Setting, ...] = (
     ),
     Setting(
         "report_format", "choice", "table", "SOLO_BOOKS_REPORT_FORMAT",
-        "how report pnl, report balances and report schedule-c print", flag="--format", choices=("table", "csv"),
+        "how every report prints", flag="--format", choices=formats.names(),
     ),
     Setting(
         "date_format", "choice", "iso", "SOLO_BOOKS_DATE_FORMAT",
-        "how dates in row listings on screen are shown: iso is 2025-03-31, us is 03/31/2025. Files and input stay ISO",
+        "how dates are shown to a person, on screen and in table, html and markdown reports: iso is 2025-03-31, us is "
+        "03/31/2025. CSV, JSON, journals, archives and input stay ISO",
         choices=("iso", "us"),
     ),
     Setting("web_port", "port", 8765, "SOLO_BOOKS_WEB_PORT", "the port the review page listens on", flag="--port"),

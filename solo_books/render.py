@@ -5,8 +5,9 @@ import csv
 import io
 import sys
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Set
+from typing import Callable, Iterable, List, Optional, Sequence, Set
 
+from . import budgets, payees
 from .files import write_atomic
 from .money import format_cents, plain_cents
 from .reconcile import ReconcileReport, printed
@@ -68,7 +69,12 @@ def deliver(text: str, output: Optional[str], byte_order_mark: bool = True) -> N
 
 # Profit and loss
 
-def pnl_text(pnl: Pnl) -> str:
+def period_line(period, day: Callable[[object], str] = str) -> str:
+    """The line under a report's heading. day writes a date the way the date_format setting asks."""
+    return f"Period: {period.label} ({day(period.start)} to {day(period.end)}), cash basis"
+
+
+def pnl_text(pnl: Pnl, day: Callable[[object], str] = str) -> str:
     headers = ["", *[bucket.label for bucket in pnl.buckets]]
     multi = len(pnl.buckets) > 1
     if multi:
@@ -104,7 +110,7 @@ def pnl_text(pnl: Pnl) -> str:
 
     lines = [
         f"Profit and loss: {pnl.business}",
-        f"Period: {pnl.period.label} ({pnl.period.start} to {pnl.period.end}), cash basis",
+        period_line(pnl.period, day),
         "",
         table(headers, body, right),
         "",
@@ -324,13 +330,13 @@ def _balance_lines(report: Balances) -> List[List[str]]:
     return rows
 
 
-def balances_text(report: Balances) -> str:
+def balances_text(report: Balances, day: Callable[[object], str] = str) -> str:
     accounts = [
         [a.name, a.kind, format_cents(a.printed(a.begin)), format_cents(a.printed(a.end))] for a in report.accounts
     ]
     lines = [
         f"Balances: {report.business}",
-        f"Period: {report.period.label} ({report.period.start} to {report.period.end}), cash basis",
+        period_line(report.period, day),
         "",
         table(["Account", "Kind", "Start", "End"], accounts, {2, 3}),
     ]
@@ -341,7 +347,7 @@ def balances_text(report: Balances) -> str:
         lines.extend(
             [
                 "",
-                f"Inventory count at {report.period.end}: {format_cents(report.inventory_end)} (from 'inventory set').",
+                f"Inventory count at {day(report.period.end)}: {format_cents(report.inventory_end)} (from 'inventory set').",
                 f"Money plus inventory: {format_cents(report.money_end + report.inventory_end)}.",
             ]
         )
@@ -399,7 +405,7 @@ def balances_csv_rows(report: Balances) -> List[List[str]]:
 
 # Reconciliation
 
-def reconcile_text(report: ReconcileReport) -> str:
+def reconcile_text(report: ReconcileReport, day: Callable[[object], str] = str) -> str:
     account = report.account
     recon = report.reconciliation
     owed = account["kind"] == "credit_card"
@@ -412,7 +418,7 @@ def reconcile_text(report: ReconcileReport) -> str:
         [f"Statement ending balance{balance_word}", printed(account, report.statement_end)],
     ]
     lines = [
-        f"Reconciliation {recon['id']}: {account['name']}, {report.start} to {report.end} [{recon['status']}]",
+        f"Reconciliation {recon['id']}: {account['name']}, {day(report.start)} to {day(report.end)} [{recon['status']}]",
         "",
         table(["", "Amount"], rows, {1}),
         "",
@@ -439,12 +445,12 @@ def reconcile_text(report: ReconcileReport) -> str:
         lines.append("Where to look:")
         lines.extend(f"  {hint}" for hint in report.hints)
     if report.compared_statement:
-        lines.extend(_statement_lines(report))
+        lines.extend(_statement_lines(report, day))
     if report.rows_added_after_finish:
         lines.append("")
         lines.append("Rows added after this period was finished:")
         for row in report.rows_added_after_finish:
-            lines.append(f"  {row['id']}  {row['posted_on']}  {format_cents(row['amount_cents'])}  {row['description']}")
+            lines.append(f"  {row['id']}  {day(row['posted_on'])}  {format_cents(row['amount_cents'])}  {row['description']}")
     if report.notes:
         lines.append("")
         lines.extend(report.notes)
@@ -458,25 +464,25 @@ def reconcile_text(report: ReconcileReport) -> str:
     return "\n".join(lines)
 
 
-def _statement_lines(report: ReconcileReport) -> List[str]:
+def _statement_lines(report: ReconcileReport, day: Callable[[object], str] = str) -> List[str]:
     lines = ["", "Line by line against the statement file:"]
     clean = True
     if report.statement_only:
         clean = False
         lines.append("  On the statement, not in the books:")
         for line in report.statement_only:
-            lines.append(f"    {line.posted_on}  {format_cents(line.amount_cents):>12}  {line.description}")
+            lines.append(f"    {day(line.posted_on)}  {format_cents(line.amount_cents):>12}  {line.description}")
     if report.book_only:
         clean = False
         lines.append("  In the books, not on the statement:")
         for row in report.book_only:
-            lines.append(f"    {row['posted_on']}  {format_cents(row['amount_cents']):>12}  {row['description']}  (transaction {row['id']})")
+            lines.append(f"    {day(row['posted_on'])}  {format_cents(row['amount_cents']):>12}  {row['description']}  (transaction {row['id']})")
     if report.amount_differs:
         clean = False
         lines.append("  Same day and merchant, different amount:")
         for line, row in report.amount_differs:
             lines.append(
-                f"    {line.posted_on}  statement {format_cents(line.amount_cents)}, "
+                f"    {day(line.posted_on)}  statement {format_cents(line.amount_cents)}, "
                 f"books {format_cents(row['amount_cents'])}  {line.description}  (transaction {row['id']})"
             )
     if report.date_differs:
@@ -484,7 +490,7 @@ def _statement_lines(report: ReconcileReport) -> List[str]:
         lines.append("  Same amount, different date (does not change the balance):")
         for line, row in report.date_differs:
             lines.append(
-                f"    statement {line.posted_on}, books {row['posted_on']}  "
+                f"    statement {day(line.posted_on)}, books {day(row['posted_on'])}  "
                 f"{format_cents(line.amount_cents):>12}  {line.description}  (transaction {row['id']})"
             )
     if clean:
@@ -492,3 +498,174 @@ def _statement_lines(report: ReconcileReport) -> List[str]:
     if report.statement_rows_outside:
         lines.append(f"  {report.statement_rows_outside} statement file row(s) were dated outside this period and ignored.")
     return lines
+
+
+# Payees, contractors and budgets
+
+def waiting_text(count: int, money_in: int, money_out: int, show: Callable[[int], str] = format_cents) -> str:
+    """The same words profit and loss uses for rows still in the queue."""
+    return f"{count} uncategorized row(s) are NOT in these figures (in {show(money_in)}, out {show(money_out)}). Run 'review'."
+
+
+PAYEES_CSV_HEADERS = ["business", "period", "section", "rank", "payee", "rows", "money_out", "money_in", "paid_by_card"]
+
+
+def payees_text(report: payees.PayeeReport, limit: int) -> str:
+    out_rows = [
+        [str(rank), e.payee.name, str(e.rows), format_cents(e.money_out), format_cents(e.by_card), format_cents(e.money_in)]
+        for rank, e in enumerate(payees.top(report, "out", limit), start=1)
+    ]
+    in_rows = [
+        [str(rank), e.payee.name, str(e.rows), format_cents(e.money_in), format_cents(e.money_out)]
+        for rank, e in enumerate(payees.top(report, "in", limit), start=1)
+    ]
+    left_out = report.left_out_count
+    lines = [
+        f"Payees: {report.business}, {report.period.label}",
+        "Rows booked to income and expense categories, from every account."
+        + (f" {left_out} transfer and owner row(s) are not payments to anyone and are left out." if left_out else ""),
+        "",
+        f"Money out, top {limit}:",
+        table(["#", "Payee", "Rows", "Money out", "By card", "Money in"], out_rows, {0, 2, 3, 4, 5}),
+        "",
+        f"Money in, top {limit}:",
+        table(["#", "Payee", "Rows", "Money in", "Money out"], in_rows, {0, 2, 3, 4}),
+        "",
+    ]
+    if report.waiting_count:
+        lines.append("WARNING: " + waiting_text(report.waiting_count, report.waiting_in, report.waiting_out))
+    lines.append(NOT_ADVICE)
+    return "\n".join(lines)
+
+
+def payees_csv_rows(report: payees.PayeeReport, limit: int, only: str = "") -> List[List[str]]:
+    rows: List[List[str]] = []
+    label = report.period.label
+    for section, direction in (("money out", "out"), ("money in", "in")):
+        for rank, entry in enumerate(payees.top(report, direction, limit), start=1):
+            rows.append([
+                report.business, label, section, str(rank), entry.payee.name, str(entry.rows),
+                plain_cents(entry.money_out), plain_cents(entry.money_in), plain_cents(entry.by_card),
+            ])
+    notes = [only] if only else []
+    if report.waiting_count:
+        notes.append(waiting_text(report.waiting_count, report.waiting_in, report.waiting_out, plain_cents))
+    notes.append(NOT_ADVICE)
+    rows.extend([report.business, label, "note", "", note, "", "", "", ""] for note in notes)
+    return rows
+
+
+CONTRACTORS_CSV_HEADERS = [
+    "business", "year", "threshold", "at_or_over", "payee", "spellings", "rows", "paid", "refunded", "net_paid", "paid_by_card",
+]
+CONTRACTOR_HEADERS = ["Payee", "Spellings", "Rows", "Paid", "Refunded", "Net paid", "Paid by card"]
+
+
+def contractor_cells(entry: payees.PayeeTotal, show: Callable[[int], str] = format_cents) -> List[str]:
+    return [
+        entry.payee.name, "; ".join(entry.payee.merchants), str(entry.rows),
+        *(show(cents) for cents in (entry.money_out, entry.money_in, entry.net_paid, entry.by_card)),
+    ]
+
+
+def contractors_waiting(report: payees.ContractorReport, show: Callable[[int], str] = format_cents) -> str:
+    return f"{report.waiting_count} row(s) to contractors are waiting for review and are NOT counted (out {show(report.waiting_out)})."
+
+
+def contractors_text(report: payees.ContractorReport) -> str:
+    def table_of(entries) -> str:
+        return table(CONTRACTOR_HEADERS, [contractor_cells(entry) for entry in entries], {2, 3, 4, 5, 6})
+
+    threshold = format_cents(report.threshold)
+    lines = [
+        f"Payments to contractors: {report.business}, {report.period.start.year}",
+        "Payees flagged with 'payee set NAME --contractor yes'. Net paid is money out less refunds, booked to income",
+        "and expense categories, from every account, cards included.",
+        *payees.CONTRACTORS_NOTICE_LINES,
+        "",
+    ]
+    if not report.flagged:
+        lines.append("No payee of this business is flagged as a contractor.")
+    else:
+        lines.append(f"Net paid of {threshold} or more: {len(report.at_or_over)} payee(s)")
+        if report.at_or_over:
+            lines.append(table_of(report.at_or_over))
+        lines.extend(["", f"Under {threshold}, or nothing paid this year: {len(report.under)} payee(s)"])
+        if report.under:
+            lines.append(table_of(report.under))
+    lines.append("")
+    if report.waiting_count:
+        lines.append(f"WARNING: {contractors_waiting(report)} Run 'review'.")
+    lines.append(NOT_ADVICE)
+    return "\n".join(lines)
+
+
+def contractors_csv_rows(report: payees.ContractorReport) -> List[List[str]]:
+    start = [report.business, str(report.period.start.year), plain_cents(report.threshold)]
+    rows = []
+    for over, entries in (("yes", report.at_or_over), ("no", report.under)):
+        for entry in entries:
+            rows.append([*start, over, *contractor_cells(entry, plain_cents)])
+    notes = [payees.CONTRACTORS_NOTICE, NOT_ADVICE]
+    if report.waiting_count:
+        notes.insert(0, contractors_waiting(report, plain_cents).replace(" NOT ", " not "))
+    rows.extend([*start, "note", note, "", "", "", "", "", ""] for note in notes)
+    return rows
+
+
+BUDGET_CSV_HEADERS = [
+    "business", "period", "period_start", "period_end", "section", "code", "category", "budget", "actual", "difference",
+    "percent_used",
+]
+BUDGET_DIFFERENCE = "Difference is actual minus budget: above zero is more income, or more spending, than planned."
+
+
+def budget_text(report: budgets.BudgetReport, day: Callable[[object], str] = str) -> str:
+    body: List[List[str]] = []
+
+    def line_of(label: str, budget: int, actual: int) -> List[str]:
+        used = budgets.percent_used(actual, budget) or "-"
+        return [label, format_cents(budget), format_cents(actual), format_cents(actual - budget), used]
+
+    for _, title, lines, total_name, total in report.sections():
+        body.append([title, "", "", "", ""])
+        body.extend(line_of(f"  {line.code} {line.name}", line.budget, line.actual) for line in lines)
+        body.append(line_of(total_name, *total))
+    body.append(line_of("NET PROFIT OR (LOSS)", *report.net))
+    text = [
+        f"Budget: {report.business}",
+        period_line(report.period, day),
+        "",
+        table(["", "Budget", "Actual", "Difference", "Used"], body, {1, 2, 3, 4}),
+        "",
+        BUDGET_DIFFERENCE,
+    ]
+    text.extend(f"NOTE: {warning}" for warning in report.warnings)
+    off = report.off
+    if off.uncategorized_count:
+        text.append("WARNING: " + waiting_text(off.uncategorized_count, off.uncategorized_in, off.uncategorized_out))
+    text.append(NOT_ADVICE)
+    return "\n".join(text)
+
+
+def budget_csv_rows(report: budgets.BudgetReport, only: str = "") -> List[List[str]]:
+    period = report.period
+    start = [report.business, period.label, period.start.isoformat(), period.end.isoformat()]
+    rows: List[List[str]] = []
+
+    def money(section: str, code: str, name: str, budget: int, actual: int) -> List[str]:
+        used = budgets.percent_used(actual, budget) or ""
+        return [*start, section, code, name, plain_cents(budget), plain_cents(actual), plain_cents(actual - budget), used.rstrip("%")]
+
+    for section, _, lines, total_name, total in report.sections():
+        rows.extend(money(section, line.code, line.name, line.budget, line.actual) for line in lines)
+        rows.append(money("total", "", total_name, *total))
+    rows.append(money("total", "", "Net profit or (loss)", *report.net))
+    notes = [*report.warnings, "Difference is actual minus budget.", NOT_ADVICE]
+    off = report.off
+    if off.uncategorized_count:
+        notes.insert(0, waiting_text(off.uncategorized_count, off.uncategorized_in, off.uncategorized_out, plain_cents))
+    if only:
+        notes.insert(0, only)
+    rows.extend([*start, "note", "", note, "", "", "", ""] for note in notes)
+    return rows

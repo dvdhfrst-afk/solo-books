@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Callable, Dict, List, Optional, Tuple
 
+from .. import payees, tags
 from ..books import list_accounts, list_categories
 from ..formats.base import GENERATOR
 from ..ledger import balance_through, find_transactions
@@ -56,6 +57,14 @@ class Entry:
     memo: str = ""
     note: str = ""
     status: str = ""  # reconciled, waiting, or nothing
+    payee: str = ""  # the payee's name in the directory; empty for an opening balance
+    tags: List[str] = field(default_factory=list)
+    merchant: str = ""  # the spelling the payee directory knows the row by
+
+    @property
+    def named(self) -> bool:
+        """Whether a person gave the payee a name of its own, by renaming it or merging it into another."""
+        return bool(self.payee) and self.payee != self.merchant
 
     @property
     def bank(self) -> JournalAccount:
@@ -125,6 +134,8 @@ def build_journal(conn: sqlite3.Connection, businesses: List[sqlite3.Row], perio
                 openings.append(entry)
             if account["opening_balance_cents"] is not None and account["opening_date"] <= period.end.isoformat():
                 closing.append((bank, balance_through(conn, account, period.end)))
+        directory = payees.directory(conn, business["id"])
+        tagged = tags.tags_by_row(conn, business["id"])
         for row in find_transactions(conn, business_id=business["id"], period=period):
             other = waiting if row["category_id"] is None else categories[row["category_id"]]
             status = "waiting" if row["category_id"] is None else "reconciled" if row["reconciliation_id"] else ""
@@ -136,6 +147,9 @@ def build_journal(conn: sqlite3.Connection, businesses: List[sqlite3.Row], perio
                 row["memo"],
                 row["note"],
                 status,
+                directory[row["merchant"]].name,
+                tagged.get(row["id"], []),
+                row["merchant"],
             ))
     # Opening balances come first on their day. Python's sort keeps the order of equal keys.
     entries = openings + rows
