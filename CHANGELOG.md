@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `--format json`, `html` and `markdown` on every report, next to `table` and `csv`. JSON amounts are whole cents with
+  a decimal string beside them, and the shape carries a `format_version`. HTML is one printable page that loads
+  nothing. Both escape every value. Each format is one module in `solo_books/formats/`.
+- `report cashflow`: money in and out of each account, and what moved it.
+- `report trend`: each category's yearly totals side by side, with the change.
+- `report categories`: each category's row count, total, average and largest row.
+- `export journal` in Ledger, Beancount, QIF and CSV forms. Every transaction adds to zero and the totals tie to
+  `report pnl`.
+- `export archive` and `import-archive`: the whole books as one JSON file with a SHA-256 of its content, loaded only
+  into empty books after every field is checked. Older archive versions are stepped up on load, and a newer one is
+  refused.
+- `report preparer` also writes `summary.html` and `summary.json`.
+- `docs/EXPORTS.md`, describing every format, journal and the archive.
+
+### Changed
+
+- The `table` and `csv` output of `report pnl`, `report balances` and `report schedule-c` is unchanged, byte for
+  byte, as are the preparer folder's CSV files.
+
 ## 1.0.0
 
 First version meant for other people's real books.

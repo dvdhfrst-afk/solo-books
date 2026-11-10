@@ -1,7 +1,7 @@
 """The program against totals added up by hand. See tests/fixtures/worked/WORKED.md."""
 from __future__ import annotations
 
-from tests.helpers import WORKED, BooksCase, parse_csv, read_csv, worked_expected
+from tests.helpers import WORKED, BooksCase, build_worked_books, parse_csv, read_csv, worked_expected
 
 
 class WorkedExample(BooksCase):
@@ -10,32 +10,8 @@ class WorkedExample(BooksCase):
     def setUp(self) -> None:
         super().setUp()
         self.expected = worked_expected()
-        self.ok("business", "add", "Business A", "--activity", "Consulting")
-        self.ok("business", "add", "Business B", "--activity", "Online shop")
-        self.ok(
-            "account", "add", "A Checking", "--business", "Business A", "--kind", "checking",
-            "--institution", "Example Bank", "--opening-balance", "5000.00", "--opening-date", "2025-01-01",
-            "--date-col", "Date", "--description-col", "Description", "--amount-col", "Amount",
-        )
-        self.ok(
-            "account", "add", "A Card", "--business", "Business A", "--kind", "credit_card",
-            "--institution", "Example Card", "--opening-balance", "200.00", "--opening-date", "2025-01-01",
-            "--date-col", "Post Date", "--description-col", "Description", "--amount-col", "Amount",
-        )
-        self.ok(
-            "account", "add", "B Checking", "--business", "Business B", "--kind", "checking",
-            "--opening-balance", "1000.00", "--opening-date", "2025-01-01", "--date-col", "Date",
-            "--description-col", "Description", "--debit-col", "Debit", "--credit-col", "Credit",
-            "--status-col", "Status", "--skip-lines", "2",
-        )
-        self.ok("rules", "import", str(WORKED / "rules_a.csv"), "--business", "Business A")
-        self.ok("rules", "import", str(WORKED / "rules_b.csv"), "--business", "Business B")
-        self.ok("import", "A Checking", str(WORKED / "a_checking_jan_feb.csv"))
-        self.ok("import", "A Checking", str(WORKED / "a_checking_feb_mar.csv"))
-        self.ok("import", "A Card", str(WORKED / "a_card_q1.csv"))
-        self.ok("import", "B Checking", str(WORKED / "b_checking_q1.csv"))
+        build_worked_books(self, review=False)
         self._review_what_the_rules_missed()
-        self.ok("inventory", "set", "--business", "Business B", "--year", "2025", "--beginning", "500.00", "--ending", "750.00")
 
     def _review_what_the_rules_missed(self) -> None:
         # The rules leave the card payments, the draw and the cafe for a person to decide.

@@ -65,5 +65,29 @@
    "from": "2025-03-01", "to": "2025-03-31", "begin": "427.09", "end": "525.62",
    "difference_cents": -1500
   }
+ },
+ "cashflow_q1": {
+  "accounts": {
+   "A Checking": {"in": "11601.87", "out": "4673.72", "net": "6928.15"},
+   "A Card": {"in": "625.27", "out": "935.89", "net": "-310.62"},
+   "B Checking": {"in": "7285.25", "out": "2553.00", "net": "4732.25"}
+  },
+  "business_a": {
+   "Income and costs": {"in": "11714.67", "out": "3597.14", "net": "8117.53"},
+   "Owner money": {"in": "0.00", "out": "1500.00", "net": "-1500.00"},
+   "Transfers": {"in": "512.47", "out": "512.47", "net": "0.00"}
+  }
+ },
+ "categories_q1": {
+  "business_a": {
+   "4000": {"rows": 3, "total": "11600.50", "average": "3866.83", "largest": "4250.00"},
+   "6105": {"rows": 3, "total": "2550.00", "average": "850.00", "largest": "850.00"},
+   "6140": {"rows": 3, "total": "530.00", "average": "176.67", "largest": "412.80"},
+   "6150": {"rows": 3, "total": "30.90", "average": "10.30", "largest": "18.40"},
+   "3900": {"rows": 4, "total": "0.00", "average": "0.00"}
+  },
+  "business_b": {
+   "4100": {"rows": 1, "total": "-45.00", "average": "-45.00", "largest": "-45.00"}
+  }
  }
 }

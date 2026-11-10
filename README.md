@@ -244,6 +244,37 @@ row behind them, for each business.
 python -m solo_books report preparer --year 2025 --out preparer-2025
 ```
 
+The folder also holds `summary.html`, one printable page with every business's year, and `summary.json` with the same
+figures for other programs.
+
+Follow the money through each account by quarter, and see which categories hold the most rows and the largest ones:
+
+```bash
+python -m solo_books report cashflow --period 2025 --by quarter
+```
+
+```bash
+python -m solo_books report categories --period 2025 --business "Business A"
+```
+
+Compare years side by side. The sample has only 2025, so 2024 shows as zero:
+
+```bash
+python -m solo_books report trend --business "Business B" --years 2024..2025
+```
+
+Any report can be a printable page, Markdown, or JSON for another program:
+
+```bash
+python -m solo_books report pnl --period 2025 --format html -o pnl-2025.html
+```
+
+Write the year as a journal for Ledger, hledger or Beancount:
+
+```bash
+python -m solo_books export journal --format ledger --period 2025 -o books-2025.ledger
+```
+
 Check the result, and make a backup:
 
 ```bash
@@ -252,6 +283,16 @@ python -m solo_books check
 
 ```bash
 python -m solo_books backup sample-backup.sqlite3
+```
+
+Or keep the whole books as one JSON file anyone can read, and load it into new books:
+
+```bash
+python -m solo_books export archive -o sample-archive.json
+```
+
+```bash
+python -m solo_books --db sample-copy.sqlite3 import-archive sample-archive.json
 ```
 
 To start over, delete `books.sqlite3`.
@@ -513,6 +554,42 @@ At the bottom it shows how line 31 ties back to profit and loss.
 each `key` the same when a line means the same thing even if its number moves. Until that file exists, reports for that
 year stop and say so; `--lines-year` uses an earlier form's lines and labels the output accordingly.
 
+**Cash flow** follows the bank rows rather than the categories: money in, money out and the net for each account,
+then the same money sorted into income and costs, owner money, transfers and rows still in the queue. The parts add up
+to the accounts.
+
+**Trend** puts each category's yearly totals side by side, `--years 2023..2025`, with the change from the first year
+to the last. **Categories** shows each category's row count, total, average row and largest row.
+
+## Formats and exports
+
+Every report takes `--format`:
+
+| Format | For |
+|---|---|
+| `table` | The terminal. The default. |
+| `csv` | A spreadsheet. Formulas in bank text are neutralized. |
+| `json` | Other programs. Every amount is whole cents and a decimal string, never a float. |
+| `html` | One printable page with nothing loaded from anywhere else. Every value is escaped. |
+| `markdown` | Notes and wikis. Every value is escaped. |
+
+```bash
+python -m solo_books report schedule-c --year 2025 --format json -o schedule-c-2025.json
+```
+
+`export journal` writes a double-entry journal in Ledger, Beancount, QIF or CSV form. Every transaction adds to zero,
+bank and card balances end where the books say, and income less expenses equals the net profit from `report pnl`.
+
+```bash
+python -m solo_books export journal --format beancount --period 2025 --business "Business B" -o business-b-2025.beancount
+```
+
+`export archive` writes everything in the books, with ids, as one JSON file carrying a SHA-256 of its content.
+`import-archive` loads it into new, empty books, after checking the hash and every field. It refuses books that
+already hold anything.
+
+[docs/EXPORTS.md](docs/EXPORTS.md) gives the shape of every format, journal and archive.
+
 ## What it does not do
 
 - US dollars only, and one person at a time. It has no sign-in and no sharing.
@@ -551,7 +628,11 @@ console redirect may not handle non-English names.
 | `ledger.py` | Finding, adding, deleting and booking rows. |
 | `reconcile.py` | Comparing the books with a statement. |
 | `reports.py`, `schedule_c.py` | Profit and loss, balances and the rollup. |
-| `render.py` | Text tables and CSV. |
+| `analysis.py` | Cash flow, trend and category figures. |
+| `render.py` | Text tables and CSV for profit and loss, balances and the rollup. |
+| `formats/` | The report formats, one module each, and the printable layout HTML and Markdown share. |
+| `journal/` | Double-entry journals, one module per format. |
+| `archive.py` | The JSON archive: writing, checking every field, and loading. |
 | `web/`, `data/review.html` | The local review page: the server, its table of addresses, and the queue's page and JSON. |
 | `money.py`, `periods.py`, `text.py` | Cents, date ranges, description cleanup. |
 
@@ -582,6 +663,7 @@ script that invented the sample year and knows each row's true category.
 
 - [docs/BANK-LAYOUTS.md](docs/BANK-LAYOUTS.md): the layouts, and what to check in a dry run.
 - [docs/RECOVERY.md](docs/RECOVERY.md): damage, restore, salvage, and what each message means.
+- [docs/EXPORTS.md](docs/EXPORTS.md): report formats, journals and archives, field by field.
 - [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md).
 
 ## License

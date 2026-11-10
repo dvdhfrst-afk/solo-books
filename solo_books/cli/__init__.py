@@ -14,6 +14,7 @@ from .. import __version__
 from . import (
     businesses,
     categorization_rules,
+    exporting,
     importing,
     reconciling,
     reporting,
@@ -33,6 +34,7 @@ AREAS = (
     transactions,
     reconciling,
     reporting,
+    exporting,
     web_page,
 )
 

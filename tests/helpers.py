@@ -83,3 +83,77 @@ def parse_csv(text: str) -> List[dict]:
 def worked_expected() -> dict:
     return json.loads((WORKED / "expected.json").read_text(encoding="utf-8"))
 
+
+SAMPLES = REPO_ROOT / "samples"
+
+
+def build_worked_books(case: BooksCase, review: bool = True) -> None:
+    """The hand-checked example in tests/fixtures/worked, imported as WORKED.md describes it."""
+    case.ok("business", "add", "Business A", "--activity", "Consulting")
+    case.ok("business", "add", "Business B", "--activity", "Online shop")
+    case.ok(
+        "account", "add", "A Checking", "--business", "Business A", "--kind", "checking",
+        "--institution", "Example Bank", "--opening-balance", "5000.00", "--opening-date", "2025-01-01",
+        "--date-col", "Date", "--description-col", "Description", "--amount-col", "Amount",
+    )
+    case.ok(
+        "account", "add", "A Card", "--business", "Business A", "--kind", "credit_card",
+        "--institution", "Example Card", "--opening-balance", "200.00", "--opening-date", "2025-01-01",
+        "--date-col", "Post Date", "--description-col", "Description", "--amount-col", "Amount",
+    )
+    case.ok(
+        "account", "add", "B Checking", "--business", "Business B", "--kind", "checking",
+        "--opening-balance", "1000.00", "--opening-date", "2025-01-01", "--date-col", "Date",
+        "--description-col", "Description", "--debit-col", "Debit", "--credit-col", "Credit",
+        "--status-col", "Status", "--skip-lines", "2",
+    )
+    case.ok("rules", "import", str(WORKED / "rules_a.csv"), "--business", "Business A")
+    case.ok("rules", "import", str(WORKED / "rules_b.csv"), "--business", "Business B")
+    case.ok("import", "A Checking", str(WORKED / "a_checking_jan_feb.csv"))
+    case.ok("import", "A Checking", str(WORKED / "a_checking_feb_mar.csv"))
+    case.ok("import", "A Card", str(WORKED / "a_card_q1.csv"))
+    case.ok("import", "B Checking", str(WORKED / "b_checking_q1.csv"))
+    if review:
+        # The rules leave the card payments, the draw and the cafe for a person to decide, as WORKED.md does.
+        decide = {"EXAMPLE CARD PAYMENT": "Transfer", "PAYMENT THANK YOU": "Transfer", "OWNER DRAW TO PERSONAL": "3100"}
+        queue = case.conn.execute("SELECT id, description FROM transactions WHERE category_id IS NULL ORDER BY id").fetchall()
+        for row in queue:
+            case.ok("categorize", decide.get(row["description"], "6150"), str(row["id"]))
+    case.ok("inventory", "set", "--business", "Business B", "--year", "2025", "--beginning", "500.00", "--ending", "750.00")
+
+
+def build_sample_books(case: BooksCase, review: bool = True) -> None:
+    """The README's walk through the sample year. With review, the queue is cleared and the missing row added."""
+    case.ok("business", "add", "Business A", "--activity", "Consulting")
+    case.ok("business", "add", "Business B", "--activity", "Online shop")
+    for name, business, kind, opening, mapping in (
+        ("A Checking", "Business A", "checking", "12500.00", "a-checking"),
+        ("A Card", "Business A", "credit_card", "425.00", "a-card"),
+        ("B Checking", "Business B", "checking", "3000.00", "b-checking"),
+    ):
+        case.ok(
+            "account", "add", name, "--business", business, "--kind", kind, "--opening-balance", opening,
+            "--opening-date", "2025-01-01", "--mapping", str(SAMPLES / "mappings" / f"{mapping}.json"),
+        )
+    case.ok("rules", "import", str(SAMPLES / "rules-business-a.csv"), "--business", "Business A")
+    case.ok("rules", "import", str(SAMPLES / "rules-business-b.csv"), "--business", "Business B")
+    case.ok("import", "A Checking", str(SAMPLES / "example-bank-a-checking-2025-01-to-07.csv"))
+    case.ok("import", "A Checking", str(SAMPLES / "example-bank-a-checking-2025-06-to-12.csv"))
+    case.ok("import", "A Card", str(SAMPLES / "example-card-a-2025.csv"))
+    case.ok("import", "B Checking", str(SAMPLES / "example-bank-b-checking-2025.csv"))
+    case.ok("rules", "add", "--business", "Business A", "--contains", "CARD PAYMENT", "--category", "Transfer")
+    case.ok("rules", "add", "--business", "Business A", "--contains", "PAYMENT THANK YOU", "--category", "Transfer")
+    case.ok("rules", "add", "--business", "Business A", "--contains", "OWNER DRAW", "--category", "Owner draws")
+    case.ok("rules", "add", "--business", "Business B", "--contains", "OWNER DRAW", "--category", "Owner draws")
+    if review:
+        case.ok("review", stdin="r 6150\nr 6110\n")
+        case.ok(
+            "txn", "add", "A Card", "--date", "2025-03-27", "--amount", "-15.00",
+            "--description", "CITY PARKING GARAGE", "--category", "Travel",
+        )
+        case.ok("inventory", "set", "--business", "Business B", "--year", "2025", "--beginning", "1500.00", "--ending", "2200.00")
+
+
+def sample_expected() -> dict:
+    return json.loads((SAMPLES / "expected-2025.json").read_text(encoding="utf-8"))
+
