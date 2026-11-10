@@ -9,8 +9,8 @@ A handler registers itself with one of four decorators:
   JSON object, and returns a dict. These two answer a failure with {"error": "text"}.
 - api(method, path): the documented API under /api/v1/ (see docs/API.md). A path can hold {name} parts that
   match a whole number, such as /api/v1/transactions/{id}. The handler is called as handler(conn, request),
-  or handler(request) when the route says needs_conn=False, and returns a dict or a (status, dict) pair.
-  It answers a failure with {"error": {"code": ..., "message": ...}}.
+  or handler(request) when the route says needs_conn=False, and returns a dict, a (status, dict) pair, or a
+  Download, which is sent as a file to save. It answers a failure with {"error": {"code": ..., "message": ...}}.
 
 A handler raises BooksError for a request it cannot answer.
 """
@@ -23,6 +23,18 @@ from typing import Any, Callable, Dict, List, NamedTuple, Optional, Pattern, Tup
 API_PREFIX = "/api/v1/"
 # Ids are whole numbers from 1 up. Eighteen digits keeps every one inside what SQLite can hold.
 _ID_PART = "[1-9][0-9]{0,17}"
+
+
+class Download(NamedTuple):
+    """A file an API answer hands over to save, such as a report written as CSV."""
+
+    name: str
+    content_type: str
+    text: str
+    byte_order_mark: bool = False
+
+    def payload(self) -> bytes:
+        return ("\ufeff" if self.byte_order_mark else "").encode("utf-8") + self.text.encode("utf-8")
 
 
 class Route(NamedTuple):

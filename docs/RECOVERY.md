@@ -39,10 +39,11 @@ circle, and budgets for categories that never reach profit and loss.
 ## You have a backup
 
 ```bash
-python -m solo_books restore books-backup-20251231-120000.sqlite3
+python -m solo_books restore sample-backup.sqlite3
 ```
 
-The backup is checked first, and a bad one changes nothing. The books as they were are kept beside it, named
+Name your own backup file: `backup` with no name writes one named for the day and time, beside the books or in the
+`backup_folder` setting. The backup is checked first, and a bad one changes nothing. The books as they were are kept beside it, named
 `books.before-restore-<time>.sqlite3`. Anything imported since the backup is gone from the books, so import those files
 again. Rows already there are recognized and are not doubled. Rows you categorized by hand since the backup do need
 categorizing again, unless a rule covers them.
@@ -112,5 +113,5 @@ python -m solo_books imports list
 ```
 
 ```bash
-python -m solo_books imports undo 1
+python -m solo_books imports undo 4
 ```

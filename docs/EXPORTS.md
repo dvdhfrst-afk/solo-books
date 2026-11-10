@@ -5,7 +5,9 @@ the sample year in the README, so you can run them and compare.
 
 ## Report formats
 
-Every report takes `--format` and `-o FILE`. `--help` on any report lists the formats this copy knows.
+Every report takes `--format` and `-o FILE`. `--help` on any report lists the formats this copy knows. Without
+`--format`, a report uses the `report_format` setting, which takes any of the formats below (see
+[CONFIGURATION.md](CONFIGURATION.md)).
 
 | Format | What it is | Byte order mark |
 |---|---|---|
@@ -17,6 +19,20 @@ Every report takes `--format` and `-o FILE`. `--help` on any report lists the fo
 
 The byte order mark is what lets Excel on Windows open a UTF-8 file with the right characters. JSON, HTML and
 Markdown readers do not want one, so those formats leave it off.
+
+**Dates.** The `date_format` setting changes how dates are shown to a person: on screen, and in the `table`, `html`
+and `markdown` formats. `iso` writes 2025-03-31 and `us` writes 03/31/2025. Formats read by other programs always
+write ISO dates: `csv`, `json`, every journal except QIF (which has its own date form), and the archive. Dates you
+type are always ISO.
+
+**Tags.** `pnl`, `cashflow`, `categories`, `trend`, `budget` and `payees` take `--tag NAME` to count only the rows that
+carry that tag. Every format says so: the table and the pages start with a line such as `Only rows tagged Harbor
+Lane.`, the CSV ends with a note row, and the JSON has `"tag": "Harbor Lane"` (`null` without one). The other reports
+refuse `--tag`, since a balance or a tax form line is not a figure a tag can split.
+
+```bash
+python -m solo_books report pnl --period 2025 --tag "Harbor Lane"
+```
 
 ```bash
 python -m solo_books report pnl --period 2025 --format html -o pnl-2025.html
@@ -44,8 +60,9 @@ A format is one module in `solo_books/formats/`. It defines a subclass of `Forma
 with a `name`, a one-line `help`, `byte_order_mark`, and `render(report)`, which returns the text. Add the module to
 `_MODULES` in `solo_books/formats/__init__.py` and every report offers it.
 
-`render` is given a `Report`: its `kind` (`pnl`, `balances`, `schedule-c`, `cashflow`, `trend` or `categories`), its
-`parts` (one result per business), and the period. Most formats call `layout.document(report)`, which turns any
+`render` is given a `Report`: its `kind` (`pnl`, `balances`, `schedule-c`, `cashflow`, `trend`, `categories`, `budget`,
+`payees` or `contractors`), its `parts` (one result per business), the period, the tag, and `show_date`, which writes a
+date the way the date setting asks. Most formats call `layout.document(report)`, which turns any
 report into sections of headings, tables and paragraphs, and only decide how those look. That is how the HTML and
 Markdown formats work.
 
@@ -60,9 +77,12 @@ Every JSON report is one object:
   "generator": "solo-books 1.0.0",
   "note": "Bookkeeping summary, not tax or accounting advice.",
   "period": {"label": "2025-Q1", "start": "2025-01-01", "end": "2025-03-31"},
+  "tag": null,
   "businesses": []
 }
 ```
+
+`tag` is there on the reports that take `--tag`. The `contractors` report has `tax_year` in place of `period`.
 
 `format_version` changes only when a field is removed or changes meaning. New fields can be added without changing it,
 so a reader should ignore fields it does not know.
@@ -90,9 +110,24 @@ What each report holds in `businesses`:
 | `cashflow` | `accounts`, `all_accounts`, `what_moved_it` (`Income and costs`, `Owner money`, `Transfers`), `waiting_for_review`; each with `money_in`, `money_out`, `net`, `rows` and per bucket figures |
 | `trend` | `years`, `categories` and `totals`, each with one value per year, `change` and `change_percent`, plus `uncategorized_rows` per year |
 | `categories` | `categories` (each with `rows`, `total`, `average` and the `largest` row: its id, date, amount and description), `waiting_for_review` |
+| `budget` | `sections` (`income`, `cogs`, `expense`; each with `categories` and a `total`, every one holding `code`, `name`, `budget`, `actual`, `difference` and `percent_used`), `net`, `uncategorized`, `warnings` |
+| `payees` | `money_out` and `money_in`, each a ranked list of up to `limit` payees with `rank`, `payee`, `spellings`, `contractor`, `rows`, `money_out`, `money_in`, `net_paid` and `paid_by_card`; `transfer_and_owner_rows_left_out`; `uncategorized` (`count`, `money_in`, `money_out`) |
+| `contractors` | `threshold`, `flagged` (how many payees are marked as contractors), `at_or_over` and `under` (payees in the same shape as in `payees`, without `rank`), `waiting_for_review` (`count`, `money_out`) |
 
 With more than one business, `pnl`, `balances` and `cashflow` also hold `all_businesses`. `change_percent` is a string
-such as `"+12.5"`, or `null` when the first year is zero.
+such as `"+12.5"`, or `null` when the first year is zero. In `budget`, `difference` is actual minus budget and
+`percent_used` is a string such as `"61.7"`, or `null` when there is no budget. The `payees` report also has `limit`
+at the top. `contractors` also has `notice`, the sentence that says what the list is and is not.
+
+A payee in `payees`, from the sample year with `--business "Business A" --limit 1`:
+
+```json
+{
+  "rank": 1, "payee": "REDWOOD PLAZA RENT", "spellings": ["REDWOOD PLAZA RENT"], "contractor": false, "rows": 12,
+  "money_out": {"cents": 1020000, "amount": "10200.00"}, "money_in": {"cents": 0, "amount": "0.00"},
+  "net_paid": {"cents": 1020000, "amount": "10200.00"}, "paid_by_card": {"cents": 0, "amount": "0.00"}
+}
+```
 
 ## The new reports
 
@@ -129,8 +164,13 @@ python -m solo_books report categories --period 2025-Q1 --business "Business B"
 | `cashflow` | `business`, `period`, `period_start`, `period_end`, `section`, `line`, `money_in`, `money_out`, `net` |
 | `trend` | `business`, `section`, `code`, `category`, one column per year, `change`, `change_percent` |
 | `categories` | `business`, `period_start`, `period_end`, `code`, `category`, `kind`, `rows`, `total`, `average`, `largest_amount`, `largest_date`, `largest_transaction_id`, `largest_description` |
+| `budget` | `business`, `period`, `period_start`, `period_end`, `section`, `code`, `category`, `budget`, `actual`, `difference`, `percent_used` |
+| `payees` | `business`, `period`, `section` (`money out` or `money in`), `rank`, `payee`, `rows`, `money_out`, `money_in`, `paid_by_card` |
+| `contractors` | `business`, `year`, `threshold`, `at_or_over` (`yes` or `no`), `payee`, `spellings`, `rows`, `paid`, `refunded`, `net_paid`, `paid_by_card` |
 
-The CSV columns of `pnl`, `balances` and `schedule-c` are unchanged from earlier versions.
+Notes, such as the not-advice line or the tag a report was limited to, come last as rows marked `note` in the
+`section` column (`at_or_over` in `contractors`). The CSV columns of `pnl`, `balances` and `schedule-c` are unchanged
+from earlier versions, and so is the contractors file that `report preparer` writes.
 
 ## The preparer folder
 
@@ -188,21 +228,35 @@ starts in the middle of a year still ends on the right balances. An account open
 opening date. Rows waiting for review are marked, and the command says how many there are. Review them first and the
 journal has no `Uncategorized` account.
 
+**Payees and tags.** A row whose payee was renamed, or merged into another payee, is written under the payee's name,
+and the bank's own text is kept beside it. A row's tags go with it, in each format's own way.
+
 **Ledger** (also read by hledger): dates `YYYY/MM/DD`, the row number as the code in parentheses, `*` for a row in a
 finished reconciliation and `!` for one waiting for review, `account` lines for every account, amounts as `$-12.34`,
-and the memo and note as `;` comments.
+and the memo and note as `;` comments. A named payee is the heading, with `; Bank text: ...` below it. Tags are a
+`; :Harbor_Lane:Spring:` comment, with spaces written as underscores, which Ledger and hledger read as tags.
 
 **Beancount**: account names are made of letters, digits and hyphens, as Beancount requires, so `Business B` becomes
 `Business-B`. Every account is opened on the first day of the period, the row number is kept as `solo_books_id`
 metadata, and a `balance` line after the last day checks every bank and card account against what the books say.
-Strings are quoted with `"` and `\` escaped.
+Strings are quoted with `"` and `\` escaped. A named payee is written Beancount's way, `"Payee" "bank text"`, and
+tags follow the text as `#Harbor-Lane`:
+
+```text
+2025-01-02 * "CLIENT HARBOR LANE INV 1002" #Harbor-Lane
+  solo_books_id: 1
+  Assets:Business-A:A-Checking                3096.14 USD
+  Income:Business-A:Sales                     -3096.14 USD
+```
 
 **QIF**: a category list, then one block per account with type `Bank` or `CCard`. Categories are written
 `<business>:<category>`. Transfers, rows waiting for review and the opening balance go to an account in brackets, as
-QIF expects. Dates are `MM/DD/YYYY`.
+QIF expects. Dates are `MM/DD/YYYY`. The payee line `P` is the payee's name. The memo line `M` holds the memo, the
+note, `Bank text: ...` when the payee has another name, and `Tags: Harbor Lane, Spring`, joined with `; `.
 
 **CSV**: one row per posting, with the columns `entry`, `date`, `transaction_id`, `status`, `business`,
-`description`, `memo`, `note`, `account` and `amount`. Rows with the same `entry` add to zero. Notes such as the
+`description`, `memo`, `note`, `account`, `amount`, `payee` and `tags`. `tags` holds the row's tags joined with `; `.
+Rows with the same `entry` add to zero. Notes such as the
 not-advice line come last, with an empty `entry`.
 
 Names that would clash once written, such as two categories that differ only in punctuation, are told apart with a
@@ -210,8 +264,8 @@ number. Text from bank rows is kept on one line in every format.
 
 ## Archives
 
-An archive is the whole of a books file as one JSON file: every business, account, category, rule, import, row,
-reconciliation and inventory count, with their ids. Use it to move books between computers or versions of the
+An archive is the whole of a books file as one JSON file: every business, account, category, rule and rule
+condition, import, row, reconciliation, inventory count, tag, payee, budget and the history of changes, with their ids. Use it to move books between computers or versions of the
 program, or to keep a copy you can read without SQLite.
 
 ```bash
@@ -239,8 +293,9 @@ The file starts like this:
 }
 ```
 
-`content` holds one list per table: `businesses`, `categories`, `accounts`, `imports`, `rules`, `reconciliations`,
-`transactions`, `import_rows`, `rule_exceptions`, `deleted_rows`, `inventory_counts` and `meta`. Each entry is one row
+`content` holds one list per table: `businesses`, `categories`, `accounts`, `imports`, `rules`, `rule_conditions`,
+`reconciliations`, `transactions`, `import_rows`, `rule_exceptions`, `deleted_rows`, `inventory_counts`, `meta`,
+`history`, `history_rows`, `tags`, `transaction_tags`, `payees` and `budgets`. Each entry is one row
 with every column, in id order, one row per line. Amounts are whole cents in fields ending `_cents`.
 
 `sha256` is the SHA-256 of `content` written canonically: keys sorted, no spaces between items, and characters outside
@@ -269,6 +324,10 @@ with one plain sentence at the first problem:
   another business's category, or locked to a reconciliation that does not cover it, is refused.
 - Each row's duplicate key matches its date, amount and description, so re-importing the same bank file afterwards is
   still recognized.
+- The rules, history, tags, payees and budgets pass the same checks `check` makes: every rule condition is one the
+  program can use, with no two of the same kind on a rule; history entries are of known kinds and readable; tags and
+  payees stay inside their own business and no payee is merged in a circle; and a budget is for an income, cost or
+  expense category of its own business, never with both a yearly amount and monthly amounts for one year.
 
 The books file is created only when loading succeeds. If loading fails partway, a file it created is removed, and
 books that were already there are left as they were.

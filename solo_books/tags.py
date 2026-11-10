@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import history
 from .db import transaction
@@ -180,6 +180,21 @@ def tags_by_row(conn: sqlite3.Connection, business_id: int) -> Dict[int, List[st
         (business_id,),
     ):
         found.setdefault(row[0], []).append(row[1])
+    return found
+
+
+def tags_for_rows(conn: sqlite3.Connection, transaction_ids: Sequence[int]) -> Dict[int, List[str]]:
+    """The tag names of each of these rows that has any, in name order."""
+    found: Dict[int, List[str]] = {}
+    ids = list(transaction_ids)
+    for start in range(0, len(ids), 500):
+        chunk = ids[start : start + 500]
+        for row in conn.execute(
+            "SELECT tt.transaction_id, g.name FROM transaction_tags tt JOIN tags g ON g.id = tt.tag_id"
+            f" WHERE tt.transaction_id IN ({', '.join('?' * len(chunk))}) ORDER BY tt.transaction_id, g.name",
+            chunk,
+        ):
+            found.setdefault(row[0], []).append(row[1])
     return found
 
 

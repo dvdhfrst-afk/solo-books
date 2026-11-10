@@ -157,6 +157,8 @@ class Request(NamedTuple):
     # A JSON object for most writes, the raw bytes for an upload, and None for a read.
     body: Any
     db_path: Path
+    # The settings the 'web' command started with, or None for a server started some other way.
+    settings: Any = None
 
     def fields(self, *known: str) -> Body:
         return Body(self.body if isinstance(self.body, dict) else {}, known)
@@ -219,7 +221,8 @@ def booked_category(row: sqlite3.Row) -> Optional[dict]:
     return {"id": row["category_id"], "code": row["category_code"], "name": row["category_name"], "kind": row["category_kind"]}
 
 
-def transaction_json(row: sqlite3.Row) -> dict:
+def transaction_json(row: sqlite3.Row, tag_names: Sequence[str] = ()) -> dict:
+    """A row, with the names of its tags, which the caller looks up for all its rows at once."""
     data = {
         "id": row["id"],
         "date": row["posted_on"],
@@ -237,6 +240,7 @@ def transaction_json(row: sqlite3.Row) -> dict:
         "reconciliation_id": row["reconciliation_id"],
         "import_id": row["import_id"],
         "note": row["note"],
+        "tags": list(tag_names),
     }
     data.update(money("amount", row["amount_cents"]))
     return data

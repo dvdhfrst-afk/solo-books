@@ -28,7 +28,8 @@ Each setting is looked up in this order, and the first place that has a value de
 4. The settings file.
 5. The setting's default.
 
-`config list` shows every setting, its value, and which of those five places it came from.
+`config list` shows every setting, its value, and which of those five places it came from. The local API shows the same,
+read only, at `GET /api/v1/config` (see [API.md](API.md#settings)).
 
 ```bash
 python -m solo_books config list
@@ -40,8 +41,8 @@ python -m solo_books config list
 |---|---|---|---|---|---|
 | `books` | file path | `books.sqlite3` | `SOLO_BOOKS_DB` | `--db` | The books file commands work on. A relative path is read from the current folder. |
 | `business` | text | not set | `SOLO_BOOKS_BUSINESS` | `--business` | The business a command works on when it needs one and you leave out `--business`. Not set means the only business, if there is just one. Commands that cover every business when `--business` is left out, such as the reports, `review`, `rules apply` and `txn list`, still cover every business. |
-| `report_format` | `table` or `csv` | `table` | `SOLO_BOOKS_REPORT_FORMAT` | `--format` | How `report pnl`, `report balances` and `report schedule-c` print. |
-| `date_format` | `iso` or `us` | `iso` | `SOLO_BOOKS_DATE_FORMAT` | none | How row dates show on screen in `txn list`, `txn show`, `review`, `import`, `reconcile list`, `rules explain` and `status`. `iso` is 2025-03-31 and `us` is 03/31/2025. Dates you type, and every file written, stay ISO. |
+| `report_format` | `table`, `csv`, `json`, `html` or `markdown` | `table` | `SOLO_BOOKS_REPORT_FORMAT` | `--format` | How every report prints. [EXPORTS.md](EXPORTS.md) describes each format. |
+| `date_format` | `iso` or `us` | `iso` | `SOLO_BOOKS_DATE_FORMAT` | none | How dates are shown to a person: on screen in `txn list`, `txn show`, `review`, `import`, `reconcile`, `rules explain`, `payee show`, `status` and every report, and in reports written as `table`, `html` or `markdown`, including the Reports page. `iso` is 2025-03-31 and `us` is 03/31/2025. Dates you type stay ISO, and so do CSV, JSON, journals and archives, which other programs read. |
 | `web_port` | port number, 0 to 65535 | `8765` | `SOLO_BOOKS_WEB_PORT` | `--port` | The port the review page listens on, at 127.0.0.1. 0 picks any free port. |
 | `import_runs_rules` | true or false | `true` | `SOLO_BOOKS_IMPORT_RUNS_RULES` | `--rules`, `--no-rules` | Whether `import` books new rows with the rules as they arrive. With false, every new row waits in the queue until `rules apply`. |
 | `backup_folder` | folder path | not set | `SOLO_BOOKS_BACKUP_FOLDER` | the FILE argument | Where `backup` puts its dated copy when you name no file. Not set means beside the books. The folder must exist. |
@@ -109,19 +110,19 @@ A profile is a named set of settings. It always names a books file, and it can h
 keep more than one set of books: a file per year, a test copy to try things on, or books for a business you keep apart.
 
 ```bash
-python -m solo_books profile add test-copy --db test-copy.sqlite3 --set date_format=us
+python -m solo_books profile add books-2026 --db books-2026.sqlite3 --set date_format=us
 ```
 
 Use it for one command with `--profile`, which every command accepts:
 
 ```bash
-python -m solo_books --profile test-copy init
+python -m solo_books --profile books-2026 init
 ```
 
 Or make it the default, so every command uses it until you say otherwise:
 
 ```bash
-python -m solo_books profile use test-copy
+python -m solo_books profile use books-2026
 ```
 
 ```bash
@@ -137,7 +138,7 @@ python -m solo_books profile list
 ```
 
 ```bash
-python -m solo_books profile show test-copy
+python -m solo_books profile show books-2026
 ```
 
 ```bash
@@ -145,7 +146,7 @@ python -m solo_books profile use --none
 ```
 
 ```bash
-python -m solo_books profile remove test-copy
+python -m solo_books profile remove books-2026
 ```
 
 Removing a profile never touches its books file.

@@ -265,8 +265,9 @@ class Precedence(ConfigCase):
         used = []
 
         class FakeServer:
-            def __init__(self, path, port, verbose=False) -> None:
+            def __init__(self, path, port, verbose=False, settings=None) -> None:
                 used.append(port)
+                self.settings = settings
                 self.origin = f"http://127.0.0.1:{port}"
                 self.url = f"{self.origin}/"
                 self.dashboard_url = f"{self.origin}/app"

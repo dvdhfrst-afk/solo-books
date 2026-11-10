@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+import threading
+from contextlib import contextmanager
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from .conditions import Condition, account_condition, amount_condition, describe_all, direction_condition, text_condition
 from .db import transaction
@@ -69,6 +71,8 @@ KINDS: Dict[str, str] = {
 REVERTIBLE = ("categorize", "note", "chart-rename", "chart-map", "rule-add", "rule-delete")
 
 _source = ""
+# The web server answers each request on a thread of its own, and names its changes there.
+_thread = threading.local()
 
 
 def set_source(name: str) -> None:
@@ -77,8 +81,20 @@ def set_source(name: str) -> None:
     _source = name
 
 
+@contextmanager
+def as_source(name: str) -> Iterator[None]:
+    """Record the changes made inside under this name, on this thread only."""
+    before = getattr(_thread, "source", None)
+    _thread.source = name
+    try:
+        yield
+    finally:
+        _thread.source = before
+
+
 def current_source() -> str:
-    return _source
+    found = getattr(_thread, "source", None)
+    return _source if found is None else found
 
 
 def _dump(value: Optional[dict]) -> Optional[str]:
@@ -107,7 +123,7 @@ def record(
         raise AssertionError("history must be written in the same transaction as the change it records")
     cursor = conn.execute(
         "INSERT INTO history (source, kind, business_id, summary, detail_json) VALUES (?, ?, ?, ?, ?)",
-        (_source, kind, business_id, summary, json.dumps(detail or {}, sort_keys=True)),
+        (current_source(), kind, business_id, summary, json.dumps(detail or {}, sort_keys=True)),
     )
     entry_id = cursor.lastrowid
     conn.executemany(

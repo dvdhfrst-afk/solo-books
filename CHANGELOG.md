@@ -2,54 +2,23 @@
 
 ## Unreleased
 
-### Added
+### Books
 
-- `web` serves a local app: a dashboard and pages for transactions, accounts, imports, rules and reconciling, beside the
-  review page, with links between them. It works with the keyboard and on a phone-width screen.
-- A JSON API under `/api/v1/` for everything those pages do, documented in `docs/API.md`. It needs the run's key in a
-  header, refuses writes from other sites, and gives the command line's own message when it refuses a write.
-- A history of every change to the books, written in the same step as the change: when, which command (or the review
-  page), the kind of change, and each row before and after. `history list`, `history show` and `history revert`, which
-  takes back a booking, a note, a category's name or form line, an added rule or a deleted rule, and refuses when a row
-  was changed again since.
-- Tags on rows: `tag add`, `tag remove`, `tag list`, `tag rename` and `tag delete`, with `txn list --tag`,
-  `report pnl --tag`, and a row's tags in `txn show`.
+- A history of every change to the books, written in the same step as the change: when, which command (or `web` for
+  the pages and the API), the kind of change, and each row before and after. `history list`, `history show` and
+  `history revert`, which takes back a booking, a note, a category's name or form line, an added rule or a deleted
+  rule, and refuses when a row was changed again since.
+- Tags on rows: `tag add`, `tag remove`, `tag list`, `tag rename` and `tag delete`, with `txn list --tag` and a row's
+  tags in `txn show`.
 - A payee directory: `payee list`, `payee show`, `payee rename`, `payee merge`, `payee unmerge` and `payee set
-  --contractor`, with `report payees` and `report contractors`. `report preparer` adds the contractors list when any
-  payee is flagged.
-- Budgets per category per year: `budget set`, `budget list`, `budget delete` and `budget copy`, with `report budget`
-  for a year, quarter, month or run of whole months.
+  --contractor`.
+- Budgets per category per year: `budget set`, `budget list`, `budget delete` and `budget copy`.
+- The books gain tables for rule conditions, the history, tags, payees and budgets. Older files are upgraded on first
+  use, with a copy kept beside them, and every rule keeps its id, its order and what it matches.
+- `check` looks at every table, rule conditions included, and `salvage` copies every table.
 
-### Changed
+### Rules
 
-- `web --open` opens the dashboard. The review page keeps its address, and `web` prints both.
-- The books gain tables for the history, tags, payees and budgets. Older files are upgraded on first use, with a copy
-  kept beside them.
-- `check` looks at the history, tags, payees and budgets too, and `salvage` copies them.
-- `--format json`, `html` and `markdown` on every report, next to `table` and `csv`. JSON amounts are whole cents with
-  a decimal string beside them, and the shape carries a `format_version`. HTML is one printable page that loads
-  nothing. Both escape every value. Each format is one module in `solo_books/formats/`.
-- `report cashflow`: money in and out of each account, and what moved it.
-- `report trend`: each category's yearly totals side by side, with the change.
-- `report categories`: each category's row count, total, average and largest row.
-- `export journal` in Ledger, Beancount, QIF and CSV forms. Every transaction adds to zero and the totals tie to
-  `report pnl`.
-- `export archive` and `import-archive`: the whole books as one JSON file with a SHA-256 of its content, loaded only
-  into empty books after every field is checked. Older archive versions are stepped up on load, and a newer one is
-  refused.
-- `report preparer` also writes `summary.html` and `summary.json`.
-- `docs/EXPORTS.md`, describing every format, journal and the archive.
-
-### Changed
-
-- The `table` and `csv` output of `report pnl`, `report balances` and `report schedule-c` is unchanged, byte for
-  byte, as are the preparer folder's CSV files.
-- Settings in a JSON file at a standard place for each system, or wherever `SOLO_BOOKS_CONFIG` says: the books file, the
-  default business, the report format, how dates show, the review page's port, whether `import` runs the rules, the
-  backup folder, and how many dated backups to keep. `config list`, `get`, `set`, `unset`, `path` and `check`. A flag
-  beats an environment variable, which beats the profile, which beats the file. See `docs/CONFIGURATION.md`.
-- Profiles, named sets of settings for more than one set of books: `profile add`, `list`, `show`, `use` and `remove`, and
-  `--profile NAME` on every command. `status` names the profile in use.
 - Rules with several conditions, all of which must match: wording, the size of the amount, money in or out, the
   account, a date range and a range of days of the month. A rule can also put a note on the rows it books. See
   `docs/RULES.md`.
@@ -57,13 +26,56 @@
   conditions, whether each rule is on, and the rows it booked. `rules test` takes `--date`, `--memo` and `--why`.
 - JSON rule packs with `rules export --format json` and `rules import`, carrying every condition and action. Importing
   the same pack twice adds nothing the second time.
+- `rules export` as CSV stops and names any rule its columns cannot carry, rather than leave it out.
+
+### Reports
+
+- `report cashflow`: money in and out of each account, and what moved it.
+- `report trend`: each category's yearly totals side by side, with the change.
+- `report categories`: each category's row count, total, average and largest row.
+- `report budget`, for a year, quarter, month or run of whole months.
+- `report payees` and `report contractors`. `report preparer` adds the contractors list when any payee is flagged,
+  and also writes `summary.html` and `summary.json`.
+- Every report prints as `table`, `csv`, `json`, `html` or `markdown`, through one registry of formats in
+  `solo_books/formats/`. JSON amounts are whole cents with a decimal string beside them, and the shape carries a
+  `format_version`. HTML is one printable page that loads nothing. Every format escapes text from the bank.
+- `--tag` on `report pnl`, `cashflow`, `categories`, `trend`, `budget` and `payees` counts only the rows with that tag,
+  and every format says so.
+- The `table` and `csv` output of `report pnl`, `report balances` and `report schedule-c` is unchanged, byte for
+  byte, as are the preparer folder's CSV files.
+
+### Exports
+
+- `export journal` in Ledger, Beancount, QIF and CSV forms. Every transaction adds to zero and the totals tie to
+  `report pnl`. Rows carry their tags and their payee's name, each in the form that program reads.
+- `export archive` and `import-archive`: the whole books as one JSON file with a SHA-256 of its content, every table
+  included, loaded only into empty books after every field and link is checked. Older archive versions are stepped up
+  on load, and a newer one is refused.
+- `docs/EXPORTS.md`, describing every format, journal and the archive.
+
+### Settings
+
+- Settings in a JSON file at a standard place for each system, or wherever `SOLO_BOOKS_CONFIG` says: the books file,
+  the default business, the report format, how dates show, the review page's port, whether `import` runs the rules,
+  the backup folder, and how many dated backups to keep. `config list`, `get`, `set`, `unset`, `path` and `check`. A
+  flag beats an environment variable, which beats the profile, which beats the file. See `docs/CONFIGURATION.md`.
+- `report_format` takes any of the five formats. `date_format` applies to every date shown to a person, on screen and
+  in table, HTML and Markdown reports. CSV, JSON, journals and archives stay ISO.
+- Profiles, named sets of settings for more than one set of books: `profile add`, `list`, `show`, `use` and `remove`,
+  and `--profile NAME` on every command. `status` names the profile in use.
 - `import --no-rules`, and `backup --prune` with `--keep`.
 
-### Changed
+### Web and API
 
-- Books are upgraded on first use, with a copy of the old file kept beside them. Every rule keeps its id, its order
-  and what it matches.
-- `rules export` as CSV stops and names any rule its columns cannot carry, rather than leave it out.
+- `web` serves a local app beside the review page: a dashboard and pages for transactions, accounts, imports, rules,
+  reconciling, payees, budgets, reports and history, with links between them. It works with the keyboard and on a
+  phone-width screen. `web --open` opens the dashboard; the review page keeps its address, and `web` prints both.
+- Tags are shown, added and removed on the Transactions page. The Rules page adds rules with any conditions, and moves,
+  disables, enables and explains them. The Reports page shows every report and downloads it as CSV, HTML or Markdown.
+- A JSON API under `/api/v1/` for everything those pages do, documented in `docs/API.md`: history with revert, tags,
+  payees, budgets, every report in the registry's JSON shape or as a download, the fuller rules, and the settings, read
+  only. It needs the run's key in a header, refuses writes from other sites, and gives the command line's own message
+  when it refuses a write. Every write through it is kept in the history as `web`.
 
 ## 1.0.0
 

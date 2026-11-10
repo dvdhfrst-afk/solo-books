@@ -1,0 +1,19 @@
+<section class="panel" aria-labelledby="find-title">
+  <h2 id="find-title">Find changes</h2>
+  <form id="filters" class="fields">
+    <label>Business <select id="f-business"></select></label>
+    <label>Kind <input id="f-kind" placeholder="rule or categorize" size="16" autocomplete="off"></label>
+    <label>When <input id="f-period" placeholder="2025-03" size="14" autocomplete="off"></label>
+    <label>Row number <input id="f-row" type="number" min="1" size="8"></label>
+    <button type="submit" class="primary">Find</button>
+  </form>
+  <p class="muted">Every change to the books is kept here, newest first, with the command or page that made it. Times are UTC.</p>
+</section>
+<section class="panel" aria-labelledby="list-title">
+  <h2 id="list-title">Changes</h2>
+  <div id="list"><p class="muted">Loading...</p></div>
+</section>
+<section class="panel" id="one" aria-labelledby="one-title" hidden>
+  <h2 id="one-title">Change</h2>
+  <div id="one-body"></div>
+</section>

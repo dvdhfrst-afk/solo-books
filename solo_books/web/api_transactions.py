@@ -4,10 +4,11 @@ from __future__ import annotations
 import sqlite3
 from typing import Optional
 
-from .. import books, ledger
+from .. import books, ledger, tags
+from ..errors import BooksError
 from ..money import format_cents
 from ..periods import parse_period
-from ..rules import list_rules
+from ..rules import get_rule, said
 from .api import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
@@ -75,20 +76,25 @@ def transaction_list(conn, request: Request) -> dict:
     offset = query.number("offset", 0, low=0)
     data = {"total": len(rows), "offset": offset, "limit": limit}
     data.update(money("net", sum(row["amount_cents"] for row in rows)))
-    data["transactions"] = [transaction_json(row) for row in rows[offset : offset + limit]]
+    shown = rows[offset : offset + limit]
+    tagged = tags.tags_for_rows(conn, [row["id"] for row in shown])
+    data["transactions"] = [transaction_json(row, tagged.get(row["id"], [])) for row in shown]
     return data
 
 
 def _detail(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
     """Everything 'txn show' says about a row: how it was booked, which files held it, and its note."""
-    data = transaction_json(row)
+    data = transaction_json(row, tags.tags_of(conn, row["id"]))
     data["held_back_from_rules"] = ledger.rules_holding_back(conn, row["id"])
     data["imports"] = [{"id": source["id"], "file_name": source["file_name"]} for source in ledger.live_imports_holding(conn, row["id"])]
     data["rule"] = None
     if row["rule_id"] is not None:
-        for rule in list_rules(conn, row["business_id"]):
-            if rule["id"] == row["rule_id"]:
-                data["rule"] = {"id": rule["id"], "match": rule["match_type"], "pattern": rule["pattern"]}
+        try:
+            rule = get_rule(conn, row["rule_id"])
+        except BooksError:
+            rule = None
+        if rule is not None:
+            data["rule"] = {"id": rule.id, "match": rule.match_type, "pattern": rule.pattern, "said": said(conn, rule)}
     return data
 
 

@@ -1,0 +1,29 @@
+<form id="pick" class="fields panel">
+  <label>Business <select id="p-business"></select></label>
+  <label>Year <input id="p-year" type="number" min="1900" max="2100" size="6" placeholder="any"></label>
+  <button type="submit">Show</button>
+</form>
+<section class="panel" aria-labelledby="list-title">
+  <h2 id="list-title">Payees</h2>
+  <p class="muted">A payee is whoever a row's money went to or came from. Each bank spelling starts as its own payee. The rows always keep the names the bank gave them. Money here is every row, whatever its category.</p>
+  <div id="list"><p class="muted">Loading...</p></div>
+</section>
+<section class="panel" aria-labelledby="change-title">
+  <h2 id="change-title">Change a payee</h2>
+  <form id="rename" class="fields">
+    <label class="wide">Payee <input id="r-payee" list="payee-names" required autocomplete="off"></label>
+    <label class="wide">Show it as <input id="r-name" required autocomplete="off"></label>
+    <button type="submit">Rename</button>
+  </form>
+  <form id="merge" class="fields">
+    <label class="wide">Make this payee <input id="m-payee" list="payee-names" required autocomplete="off"></label>
+    <label class="wide">another spelling of <input id="m-into" list="payee-names" required autocomplete="off"></label>
+    <button type="submit">Merge</button>
+  </form>
+  <form id="unmerge" class="fields">
+    <label class="wide">Take this spelling back out <input id="u-payee" list="payee-names" required autocomplete="off"></label>
+    <button type="submit">Unmerge</button>
+  </form>
+  <datalist id="payee-names"></datalist>
+  <p class="muted">A contractor flag on a payee that is merged carries over to the payee it joins. Unmerging gives back the flag as it was. Every change is in the History page.</p>
+</section>

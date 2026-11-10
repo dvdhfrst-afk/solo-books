@@ -59,10 +59,11 @@ async function findRows() {
     el("button", { type: "button", className: "link", textContent: row.description, "aria-label": "Open row " + row.id + ": " + row.description, onclick: () => openRow(row.id).catch(failed) }),
     row.amount,
     row.category ? categoryText(row.category) : tag("waiting"),
+    el("span", {}, ...row.tags.map((name) => tag(name))),
     row.reconciliation_id ? tag("reconciled", "good") : "",
   ]);
   byId("rows").replaceChildren(table(
-    [{ title: "Date", className: "date" }, { title: "Account" }, { title: "Description", className: "text" }, { title: "Amount", className: "num" }, { title: "Category" }, { title: "" }],
+    [{ title: "Date", className: "date" }, { title: "Account" }, { title: "Description", className: "text" }, { title: "Amount", className: "num" }, { title: "Category" }, { title: "Tags" }, { title: "" }],
     rows,
   ));
 }
@@ -72,7 +73,7 @@ function drawDetail(row) {
   byId("detail-title").textContent = "Transaction " + row.id;
   let booked = categoryText(row.category);
   if (row.category && row.booked_by === "manual") booked += ", by hand";
-  if (row.category && row.booked_by === "rule") booked += row.rule ? ", by rule " + row.rule.id + " (" + row.rule.match + " " + row.rule.pattern + ")" : ", by a rule since deleted";
+  if (row.category && row.booked_by === "rule") booked += row.rule ? ", by rule " + row.rule.id + " (" + row.rule.said + ")" : ", by a rule since deleted";
   byId("detail-facts").replaceChildren(facts([
     ["Date", row.date],
     ["Account", row.account + " (" + row.business + ")"],
@@ -87,6 +88,7 @@ function drawDetail(row) {
     ["Imported", row.imports.length ? row.imports.map((i) => i.file_name + " (import " + i.id + ")").join(", ") : "no, added by hand"],
   ]));
   byId("d-note").value = row.note || "";
+  drawTags(row);
   byId("d-clear").disabled = !row.category;
   byId("d-delete").disabled = Boolean(row.reconciliation_id);
   byId("d-locked").textContent = row.reconciliation_id
@@ -94,11 +96,24 @@ function drawDetail(row) {
     : "";
 }
 
+function drawTags(row) {
+  const chips = row.tags.map((name) => {
+    const off = el("button", { type: "button", className: "link", textContent: "remove", "aria-label": "Take tag " + name + " off this row" });
+    off.addEventListener("click", () => busy(off, async () => {
+      await api("POST", "tags/remove", { body: { tag: name, ids: [row.id] } });
+      await afterChange(await api("GET", "transactions/" + row.id), "Took tag " + name + " off.");
+    }));
+    return el("span", { className: "tag" }, name + " ", off);
+  });
+  byId("d-tags").replaceChildren(chips.length ? el("span", {}, "Tags: ", ...chips) : el("span", { className: "muted", textContent: "No tags." }));
+}
+
 async function openRow(id) {
   const row = await api("GET", "transactions/" + id);
   fillCategories(byId("d-category"), await chart(row.business_id), "Choose a category");
   byId("d-category").value = row.category ? row.category.code : "";
   drawDetail(row);
+  await fillTagNames();
   if (!byId("detail").open) byId("detail").showModal();
 }
 
@@ -125,6 +140,23 @@ byId("d-clear").addEventListener("click", (event) => busy(event.currentTarget, a
   byId("d-category").value = "";
   await afterChange(result.transaction, "Back in the review queue.");
 }));
+
+byId("detail-tags").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const name = byId("d-tag").value.trim();
+  if (!name) { toast("Type a tag first.", true); return; }
+  busy(event.submitter, async () => {
+    const result = await api("POST", "tags/add", { body: { tag: name, ids: [shown.id] } });
+    byId("d-tag").value = "";
+    await afterChange(await api("GET", "transactions/" + shown.id), "Tagged it " + result.tag + (result.created ? " (a new tag)." : "."));
+    await fillTagNames();
+  });
+});
+
+async function fillTagNames() {
+  const result = await api("GET", "tags", { query: { business: shown ? shown.business_id : "" } });
+  byId("tag-names").replaceChildren(...result.tags.map((t) => el("option", { value: t.name })));
+}
 
 byId("detail-note").addEventListener("submit", (event) => {
   event.preventDefault();

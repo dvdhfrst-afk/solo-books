@@ -21,6 +21,10 @@ APP_PAGES = (
     ("/imports", "Imports", "imports"),
     ("/rules", "Rules", "rules"),
     ("/reconcile", "Reconcile", "reconcile"),
+    ("/payees", "Payees", "payees"),
+    ("/budgets", "Budgets", "budgets"),
+    ("/reports", "Reports", "reports"),
+    ("/history", "History", "history"),
 )
 NAVIGATION = tuple((path, title) for path, title, _ in APP_PAGES) + (("/", "Review"),)
 _PLACEHOLDER = re.compile(r"__([A-Z]+)__")

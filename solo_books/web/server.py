@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 from urllib.parse import parse_qs, urlparse
 
+from .. import history
 from ..db import connect, friendly_error
 from ..errors import BooksError
 from . import routes
@@ -88,7 +89,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
         try:
             conn = connect(self.server.db_path)
             try:
-                self._json(200, work(conn))
+                with history.as_source("web"):
+                    answer = work(conn)
+                self._json(200, answer)
             finally:
                 conn.close()
         except BooksError as exc:
@@ -107,7 +110,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     message = exc if isinstance(exc, BooksError) else friendly_error(self.server.db_path, exc)
                     raise ApiError(503, str(message)) from None
                 try:
-                    result = route.handler(conn, request)
+                    with history.as_source("web"):
+                        result = route.handler(conn, request)
                 finally:
                     conn.close()
             else:
@@ -125,6 +129,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 print(f"solo-books: request failed: {type(exc).__name__}: {exc}", file=sys.stderr)
             self._fail(True, 500, f"this is a bug in the program ({type(exc).__name__}). The step in progress was rolled back.")
         else:
+            if isinstance(result, routes.Download):
+                # The name is made of letters, digits, dots and hyphens, so it needs no quoting rules.
+                self._send(200, result.payload(), result.content_type, {"Content-Disposition": f'attachment; filename="{result.name}"'})
+                return
             status, data = result if isinstance(result, tuple) else (200, result)
             self._json(status, data)
 
@@ -226,7 +234,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     return
             else:
                 body = {}
-        request = Request(params, parse_qs(query, keep_blank_values=True), body, self.server.db_path)
+        request = Request(params, parse_qs(query, keep_blank_values=True), body, self.server.db_path, self.server.settings)
         self._answer_api(route, request)
 
     def do_GET(self) -> None:
@@ -252,9 +260,10 @@ class ReviewServer(ThreadingHTTPServer):
     # On Windows this option would let a second server share the port and answer in the first one's place.
     allow_reuse_address = os.name != "nt"
 
-    def __init__(self, db_path: Path, port: int = 0, verbose: bool = False) -> None:
+    def __init__(self, db_path: Path, port: int = 0, verbose: bool = False, settings=None) -> None:
         self.db_path = Path(db_path)
         self.verbose = verbose
+        self.settings = settings
         self.token = secrets.token_urlsafe(24)
         super().__init__((LOCAL_ADDRESS, port), ReviewHandler)
 

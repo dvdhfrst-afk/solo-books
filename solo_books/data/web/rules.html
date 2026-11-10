@@ -3,7 +3,7 @@
 </form>
 <section class="panel" aria-labelledby="list-title">
   <h2 id="list-title">Rules, in the order they are tried</h2>
-  <p class="muted">The lowest priority number goes first, and the first match books the row. Rules never change a row you booked by hand. Deleting a rule leaves the rows it booked as they are.</p>
+  <p class="muted">Rules are tried from the top, and the first one whose conditions all hold books the row. A disabled rule keeps its place and books nothing. Rules never change a row you booked by hand. Deleting or disabling a rule leaves the rows it booked as they are.</p>
   <div id="list"><p class="muted">Loading...</p></div>
   <form id="apply" class="fields">
     <label class="check"><input id="p-recheck" type="checkbox"> Also re-run over rows rules booked earlier</label>
@@ -12,25 +12,31 @@
 </section>
 <section class="panel" aria-labelledby="add-title">
   <h2 id="add-title">Add a rule</h2>
-  <p class="muted">None of the matches care about case. Exact means the whole description, or the merchant name as a test reads it. A short "contains" reaches far: PAYMENT catches every row with that word.</p>
+  <p class="muted">Give at least one condition. A row must meet every condition given. None of the wording tests care about case. A short "contains" reaches far: PAYMENT catches every row with that word.</p>
   <form id="add" class="fields">
-    <label>Match <select id="n-match">
+    <label>Wording <select id="n-match">
+      <option value="">Any wording</option>
       <option value="contains">contains</option>
-      <option value="starts">starts with</option>
+      <option value="starts_with">starts with</option>
       <option value="exact">is exactly</option>
       <option value="regex">regular expression</option>
     </select></label>
-    <label class="wide">Pattern <input id="n-pattern" required autocomplete="off"></label>
-    <label>Category <select id="n-category" required></select></label>
-    <label>Priority <input id="n-priority" type="number" value="100" size="6"></label>
+    <label class="wide">Text <input id="n-pattern" autocomplete="off"></label>
     <label>Direction <select id="n-direction">
       <option value="">Either way</option>
       <option value="in">Money in only</option>
       <option value="out">Money out only</option>
     </select></label>
-    <label>At least <input id="n-min" inputmode="decimal" size="10" placeholder="0.00"></label>
-    <label>At most <input id="n-max" inputmode="decimal" size="10"></label>
+    <label>Size at least <input id="n-min" inputmode="decimal" size="10" placeholder="0.00"></label>
+    <label>Size at most <input id="n-max" inputmode="decimal" size="10"></label>
     <label>Only in account <select id="n-account"></select></label>
+    <label>Dated from <input id="n-from" type="date"></label>
+    <label>Dated to <input id="n-to" type="date"></label>
+    <label>Day of the month from <input id="n-day-from" type="number" min="1" max="31" size="4"></label>
+    <label>Day of the month to <input id="n-day-to" type="number" min="1" max="31" size="4"></label>
+    <label>Category <select id="n-category" required></select></label>
+    <label class="wide">Note to put on the rows it books <input id="n-note" autocomplete="off"></label>
+    <label>Priority <input id="n-priority" type="number" value="100" size="6"></label>
     <button type="submit" class="primary">Add the rule</button>
   </form>
 </section>
@@ -43,4 +49,13 @@
     <button type="submit">Test it</button>
   </form>
   <div id="test-result" aria-live="polite"></div>
+</section>
+<section class="panel" aria-labelledby="explain-title">
+  <h2 id="explain-title">Explain a row</h2>
+  <p class="muted">Every rule tried on one row, in order, with each condition and whether it held. The row number is on the Transactions page.</p>
+  <form id="explain" class="fields">
+    <label>Row number <input id="e-id" type="number" min="1" required size="8"></label>
+    <button type="submit">Explain it</button>
+  </form>
+  <div id="explain-result" aria-live="polite"></div>
 </section>

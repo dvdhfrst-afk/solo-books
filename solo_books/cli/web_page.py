@@ -13,7 +13,7 @@ def cmd_web(args) -> int:
     port = args.settings.pick("web_port", args.port)
     db.connect(path).close()
     try:
-        server = web.ReviewServer(path, port, verbose=args.verbose)
+        server = web.ReviewServer(path, port, verbose=args.verbose, settings=args.settings)
     except OSError as exc:
         raise BooksError(f"cannot listen on port {port}: {exc.strerror}. Another program may have it. Try --port.") from None
     print(f"Books at {server.dashboard_url}  (Ctrl+C stops it)", flush=True)

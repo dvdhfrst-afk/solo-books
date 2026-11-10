@@ -5,8 +5,10 @@
 sample year in the README, so the figures can be checked against `samples/expected-2025.json`.
 
 The API does what the command line does, through the same code and the same checks. A write the command line refuses,
-the API refuses with the same sentence. It does not create businesses or accounts, change mappings, back up, restore or
-write reports. Those stay on the command line.
+the API refuses with the same sentence. Every write is kept in the history of changes, as the command line's are, with
+`web` as the source. It does not create businesses or accounts, change mappings or settings, back up or restore. Those
+stay on the command line. Reports come back as JSON, or as a file for the browser to save, and the API writes nothing
+to your disk but the books.
 
 ## Starting it
 
@@ -40,7 +42,8 @@ between your books and any other program on this computer, so treat it like a pa
 - **Ids** in a path are whole numbers from 1 up. Anything else in that place is a 404.
 
 Every answer is JSON and carries `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` and
-`Referrer-Policy: no-referrer`.
+`Referrer-Policy: no-referrer`. The one exception is a report asked for in another format, which comes back as a file
+download (see [Reports](#reports)).
 
 ## Money and dates
 
@@ -99,6 +102,28 @@ refusal. Some mention a command line flag, such as `--force`; the API's field of
 | DELETE | `rules/{id}` | Delete a rule. |
 | POST | `rules/test` | Which rule a description would hit. |
 | POST | `rules/apply` | Run the rules over the queue. |
+| POST | `rules/{id}/enable` | Let a disabled rule book rows again. |
+| POST | `rules/{id}/disable` | Stop a rule booking rows, keeping its place. |
+| POST | `rules/{id}/move` | Put a rule at another place in the order. |
+| GET | `rules/explain` | Each rule tried on one row, condition by condition. |
+| GET | `tags` | Tags, with their rows and money. |
+| POST | `tags/add` | Tag rows. |
+| POST | `tags/remove` | Take a tag off rows. |
+| GET | `payees` | Payees, with their rows and money per year. |
+| POST | `payees/rename` | Show a payee under another name. |
+| POST | `payees/merge` | Make one payee another spelling of a second. |
+| POST | `payees/unmerge` | Take a spelling back out into a payee of its own. |
+| POST | `payees/contractor` | Mark a payee as a contractor, or not. |
+| GET | `budgets` | Budgets for a year. |
+| POST | `budgets` | Set a budget. |
+| POST | `budgets/delete` | Delete a year's budget for a category. |
+| GET | `reports` | The reports, their parameters and formats. |
+| GET | `reports/{kind}` | A report as JSON, or as a file in another format. |
+| GET | `reports/{kind}/document` | A report laid out as headings, tables and paragraphs, for a page to draw. |
+| GET | `history` | Changes to the books, newest first. |
+| GET | `history/{id}` | One change, row by row. |
+| POST | `history/{id}/revert` | Take one change back. |
+| GET | `config` | The settings in effect and where each came from. Read only. |
 | GET | `reconciliations` | Reconciliations. |
 | GET | `reconciliations/{id}` | One reconciliation, worked out again. |
 | POST | `reconciliations` | Compare the books with a statement period. |
@@ -227,10 +252,12 @@ A transaction in any answer looks like this:
   "id": 5, "date": "2025-01-10", "account_id": 1, "account": "A Checking", "business_id": 1, "business": "Business A",
   "description": "OWNER DRAW TO PERSONAL", "memo": "", "merchant": "OWNER DRAW TO", "reference": "",
   "category": {"id": 2, "code": "3100", "name": "Owner draws", "kind": "equity"},
-  "booked_by": "manual", "rule_id": null, "reconciliation_id": null, "import_id": 1, "note": "",
+  "booked_by": "manual", "rule_id": null, "reconciliation_id": null, "import_id": 1, "note": "", "tags": [],
   "amount_cents": -160000, "amount": "-1,600.00"
 }
 ```
+
+`tags` lists the names of the row's tags, sorted.
 
 `category` is `null` while the row waits for review. `booked_by` is `manual`, `rule` or `null`. `reference` is the
 bank's own id for the row, if the export had one. `reconciliation_id` is set once the row's period is finished.
@@ -270,8 +297,8 @@ Meals.
 ### GET transactions/{id}
 
 A transaction with three more fields: `held_back_from_rules` (rule ids that will never book this row), `imports` (the
-files that held it, each `{"id", "file_name"}`, empty for a row added by hand), and `rule` (`{"id", "match", "pattern"}`
-for the rule that booked it, or `null`).
+files that held it, each `{"id", "file_name"}`, empty for a row added by hand), and `rule` (`{"id", "match", "pattern",
+"said"}` for the rule that booked it, or `null`). `said` is the whole rule in words, as `rules list` prints it.
 
 ### POST transactions/{id}/category
 
@@ -394,17 +421,24 @@ Refused with 409: an import already undone, rows in a finished reconciliation, o
 
 ## Rules
 
-A rule in any answer:
+A rule is a list of conditions that must all hold, a category, and an optional note. [RULES.md](RULES.md) explains
+each condition. A rule in any answer, here the first rule of the sample year:
 
 ```json
 {
-  "id": 23, "business_id": 1, "business": "Business A", "priority": 100, "match": "contains", "pattern": "CARD PAYMENT",
-  "category": {"id": 3, "code": "3900", "name": "Transfer"}, "direction": null, "account_id": null, "account": null,
-  "rows": 12, "min_cents": null, "min": null, "max_cents": null, "max": null
+  "id": 1, "business_id": 1, "business": "Business A", "place": 1, "priority": 100, "enabled": true,
+  "conditions": [{"kind": "starts_with", "text": "CLIENT"}, {"kind": "direction", "direction": "in"}],
+  "said": "starts with 'CLIENT' and money in -> 4000 Sales", "conditions_said": "starts with 'CLIENT' and money in",
+  "category": {"id": 4, "code": "4000", "name": "Sales"}, "note": "",
+  "match": "starts", "pattern": "CLIENT", "direction": "in", "account_id": null, "account": null,
+  "rows": 30, "min_cents": null, "min": null, "max_cents": null, "max": null
 }
 ```
 
-`rows` is how many rows the rule has booked.
+`place` is the rule's number in the order it is tried. `conditions` are written exactly as a rule file writes them
+(see [Rule files](RULES.md#rule-files)), so one can be copied into the other. `rows` is how many rows the rule has
+booked. `match`, `pattern`, `direction`, `account_id`, `min` and `max` give the same conditions in the older single
+fields, for scripts written before; `match` and `pattern` are `null` for a rule with no wording condition.
 
 ### GET rules
 
@@ -412,33 +446,41 @@ A rule in any answer:
 |---|---|
 | `business` | Only this business's rules. Without it, every business's, business by business. |
 
-The answer is `{"rules": [...]}`, in the order they are tried: lowest priority first, the first match wins.
+The answer is `{"rules": [...]}`, in the order they are tried, the first match wins. Disabled rules are listed too,
+with `"enabled": false`.
 
 ### POST rules
 
 ```json
-{"business_id": 1, "match": "contains", "pattern": "CARD PAYMENT", "category": "Transfer"}
+{
+  "business_id": 1, "category": "6150", "note": "Small coffee runs",
+  "conditions": [{"kind": "contains", "text": "COFFEE"}, {"kind": "amount_at_most", "amount": "20.00"}]
+}
 ```
 
 | Field | Meaning |
 |---|---|
 | `business_id` | Which business. It may be left out when there is only one. |
-| `match` | `contains`, `starts`, `exact` or `regex`. Required. None is case-sensitive. |
-| `pattern` | The text to match. Required. |
+| `conditions` | The conditions, as a rule file writes them. A condition that names an account gives its name. |
 | `category` | Code or name. Required. |
+| `note` | A note the rule puts on the rows it books. |
 | `priority` | Lower numbers are tried first. The default is 100. |
-| `direction` | `in` or `out` to limit it to money in or out. |
+| `enabled` | `false` adds the rule switched off. The default is `true`. |
+| `match`, `pattern` | The older way to give one wording condition: `contains`, `starts`, `exact` or `regex`, and its text. |
+| `direction` | `in` or `out`, the older way to limit it to money in or out. |
 | `min`, `max` | Only rows of at least, or at most, this size, as text such as `"100.00"`. |
 | `account_id` | Only rows in this account, which must belong to the business. |
 
-The rule is added and the rules run over the queue, as `rules add` does. The answer is 201:
+`conditions` and the older fields can be mixed, and at least one condition is needed. The rule is added and the rules
+run over the queue, as `rules add` does. The answer is 201, with the rule and how many rows it booked:
 
 ```json
-{"rule": {"id": 23, "pattern": "CARD PAYMENT", "category": {"id": 3, "code": "3900", "name": "Transfer"}, "rows": 12}, "categorized": 12}
+{"rule": {"id": 29, "place": 21, "said": "contains 'COFFEE' and size is at most 20.00 -> 6150 Meals, note 'Small coffee runs'", "rows": 0}, "categorized": 0}
 ```
 
-Refused with 422: an unknown match type, a regular expression that does not compile or could hang, a minimum above the
-maximum, a category from another business or a retired one.
+(The rule is shortened here.) Refused with 400 when there is no condition at all. Refused with 422: an unknown
+condition kind, two wording conditions or two of any one kind, a regular expression that does not compile or could
+hang, a minimum above the maximum, an account or category from another business, or a retired category.
 
 ### DELETE rules/{id}
 
@@ -447,6 +489,43 @@ maximum, a category from another business or a retired one.
 ```
 
 Rows the rule booked keep their category.
+
+### POST rules/{id}/enable and rules/{id}/disable
+
+No body. A disabled rule keeps its place but books nothing, and the rows it booked stay booked. Enabling it runs the
+rules over the queue, as `rules enable` does. The answer is `{"rule": {...}, "categorized": 0}`.
+
+### POST rules/{id}/move
+
+```json
+{"to": 1}
+```
+
+Puts the rule at place `to`, counted from 1, or just before another rule with `{"before": RULE_ID}`. The answer is the
+new place and the business's rules in their new order: `{"place": 1, "rules": [...]}`. Refused with 422 for a place
+past the end or a rule from another business.
+
+### GET rules/explain
+
+| Parameter | Meaning |
+|---|---|
+| `transaction` | A row id. Required. |
+
+Tries each of the row's business's rules on it, in order, as `rules explain` does:
+
+```json
+{
+  "transaction_id": 1, "merchant": "CLIENT HARBOR LANE", "booked_by": "rule", "rule_id": 1, "winner": 1,
+  "trials": [
+    {"place": 1, "rule_id": 1, "enabled": true, "said": "starts with 'CLIENT' and money in -> 4000 Sales",
+     "conditions": ["starts with 'CLIENT': yes", "money in: yes (money comes in)"],
+     "matched": true, "held_back": false, "verdict": "MATCHES, and books the row"}
+  ]
+}
+```
+
+(One trial is shown.) `winner` is the rule that would book the row now, or `null`. `held_back` is true when the row
+was taken out of that rule's reach by a manual booking. A row id that does not exist is a 404.
 
 ### POST rules/test
 
@@ -458,7 +537,7 @@ Only `description` is required. Without an amount, it is tested as 1.00 of money
 size may need one.
 
 ```json
-{"merchant": "CLOUDSTACK HOSTING", "rule": {"id": 10, "match": "contains", "pattern": "CLOUDSTACK"}, "category": {"id": 32, "code": "6200", "name": "Software subscriptions", "kind": "expense"}, "tested_amount_cents": -100, "tested_amount": "-1.00"}
+{"merchant": "CLOUDSTACK HOSTING", "rule": {"id": 10, "match": "contains", "pattern": "CLOUDSTACK", "said": "contains 'CLOUDSTACK' -> 6200 Software subscriptions"}, "category": {"id": 32, "code": "6200", "name": "Software subscriptions", "kind": "expense"}, "tested_amount_cents": -2409, "tested_amount": "-24.09"}
 ```
 
 No match is an answer, not an error: `rule` and `category` are `null`.
@@ -475,6 +554,313 @@ rules booked earlier, which is what you want after changing a rule. Rows booked 
 ```json
 {"results": [{"business_id": 1, "business": "Business A", "categorized": 0, "changed": 0, "returned_to_review": 0}]}
 ```
+
+## Tags
+
+A tag is a name on rows, such as a client or a project, that the reports can count on its own.
+
+### GET tags
+
+| Parameter | Meaning |
+|---|---|
+| `business` | Only this business's tags. |
+
+```json
+{"tags": [{"id": 1, "business_id": 1, "business": "Business A", "name": "Harbor Lane", "rows": 2, "waiting": 0, "money_in_cents": 309614, "money_in": "3,096.14", "money_out_cents": 2409, "money_out": "24.09"}]}
+```
+
+`waiting` counts the tagged rows still waiting for review.
+
+### POST tags/add
+
+```json
+{"tag": "Harbor Lane", "ids": [1, 102]}
+```
+
+Tags the rows, making the tag in their business if it is new. The rows must all be in one business.
+
+```json
+{"tag": "Harbor Lane", "added": 2, "already": 0, "created": true}
+```
+
+Refused with 400 when `ids` is not a list of row ids, and with 422 for a row that does not exist or a name that is
+empty, longer than 40 characters, or holds a tab or line break.
+
+### POST tags/remove
+
+The same body. The answer is `{"tag": "Harbor Lane", "removed": 1, "not_tagged": 0}`. The tag itself stays, even with
+no rows left.
+
+## Payees
+
+A payee is whoever a row's money went to or came from, as the bank names them. Each spelling starts as its own payee.
+
+### GET payees
+
+| Parameter | Meaning |
+|---|---|
+| `business` | Which business. It may be left out when there is only one. |
+| `year` | Only payees with rows in this year, and only this year's figures. |
+
+```json
+{
+  "business_id": 1, "business": "Business A",
+  "payees": [
+    {"name": "BLUE FERN CAFE", "key": "BLUE FERN CAFE", "renamed": false, "contractor": false, "spellings": ["BLUE FERN CAFE"],
+     "years": [{"year": 2025, "rows": 59, "money_out_cents": 82348, "money_out": "823.48", "money_in_cents": 0, "money_in": "0.00"}]}
+  ]
+}
+```
+
+(One payee is shown.) `key` is the spelling the payee started as. `name` is what it is shown as.
+
+### POST payees/rename
+
+```json
+{"business_id": 1, "payee": "PIXEL FOUNDRY CONTRACTOR", "name": "Pixel Foundry"}
+```
+
+`payee` is any of the payee's names or spellings. The answer is the payee:
+
+```json
+{"payee": {"name": "Pixel Foundry", "key": "PIXEL FOUNDRY CONTRACTOR", "renamed": true, "contractor": false, "spellings": ["PIXEL FOUNDRY CONTRACTOR"]}}
+```
+
+### POST payees/merge
+
+```json
+{"business_id": 1, "payee": "CLIENT FERNDALE CO", "into": "Pixel Foundry"}
+```
+
+Makes the first payee another spelling of the second. The answer is `{"payee": {...}, "contractor_carried": false}`,
+where `contractor_carried` says whether a contractor mark moved over from the first. Refused with 422 when the
+two are already one payee.
+
+### POST payees/unmerge
+
+```json
+{"business_id": 1, "payee": "CLIENT FERNDALE CO"}
+```
+
+Takes a spelling back out into a payee of its own. The answer is
+`{"payee": {...}, "apart_from": "Pixel Foundry", "contractor_returned": false}`. Refused with 422 when the spelling
+was never merged.
+
+### POST payees/contractor
+
+```json
+{"business_id": 1, "payee": "Pixel Foundry", "contractor": true}
+```
+
+Marks the payee as a contractor for the contractors report, or takes the mark off with `false`. `contractor` must be
+`true` or `false`. The answer is `{"payee": {...}}`.
+
+## Budgets
+
+A budget is an amount for an income, cost or expense category in one year, given for the whole year or month by month.
+
+### GET budgets
+
+| Parameter | Meaning |
+|---|---|
+| `business` | Only this business's budgets. |
+| `year` | Only this year's. |
+
+```json
+{
+  "budgets": [
+    {"business": "Business A", "year": 2025, "code": "6150", "name": "Meals", "kind": "expense", "entered_as": "yearly",
+     "months": [{"month": 1, "amount_cents": 10000, "amount": "100.00"}],
+     "year_total_cents": 120000, "year_total": "1,200.00"}
+  ]
+}
+```
+
+(`months` is shortened; it always has all twelve.) `entered_as` is `yearly` or `monthly`.
+
+### POST budgets
+
+```json
+{"business_id": 1, "category": "6150", "year": 2025, "yearly": "1200.00"}
+```
+
+| Field | Meaning |
+|---|---|
+| `business_id` | Which business. It may be left out when there is only one. |
+| `category` | Code or name. Required. |
+| `year` | Required. |
+| `yearly` | The amount for the year, spread evenly over the months. |
+| `monthly` | The amount for each month. With `month`, for that month only. |
+| `month` | 1 to 12, with `monthly`. |
+
+Give `yearly` or `monthly`, not both. Amounts are positive for income and spending alike. The answer is
+`{"budget": {...}, "spread": false}`. `spread` is true when a monthly amount for one month first turned a yearly
+budget into twelve monthly ones, as `budget set` does.
+
+### POST budgets/delete
+
+```json
+{"business_id": 1, "category": "6080", "year": 2025}
+```
+
+```json
+{"deleted": {"code": "6080", "name": "Office expense", "year": 2025}, "year_total_cents": 10000, "year_total": "100.00"}
+```
+
+## Reports
+
+Every report the `report` command writes, through the same code and the same format registry. The JSON is exactly
+what `report KIND --format json` writes, in the shape [EXPORTS.md](EXPORTS.md#json-reports) describes.
+
+### GET reports
+
+```json
+{
+  "reports": [
+    {"report": "pnl", "parameters": ["business", "format", "period", "by", "tag"]},
+    {"report": "balances", "parameters": ["business", "format", "period"]},
+    {"report": "schedule-c", "parameters": ["business", "format", "year", "lines_year", "all_lines"]},
+    {"report": "cashflow", "parameters": ["business", "format", "period", "by", "tag"]},
+    {"report": "trend", "parameters": ["business", "format", "years", "tag"]},
+    {"report": "categories", "parameters": ["business", "format", "period", "tag"]},
+    {"report": "budget", "parameters": ["business", "format", "period", "tag"]},
+    {"report": "payees", "parameters": ["business", "format", "year", "limit", "tag"]},
+    {"report": "contractors", "parameters": ["business", "format", "year", "threshold"]}
+  ],
+  "formats": ["table", "csv", "json", "html", "markdown"],
+  "taggable": ["pnl", "cashflow", "categories", "trend", "budget", "payees"]
+}
+```
+
+### GET reports/{kind}
+
+| Parameter | Meaning |
+|---|---|
+| `business` | Only this business. Without it, every business. |
+| `format` | `json` (the default), `csv`, `html`, `markdown` or `table`. |
+| `period` | For `pnl`, `balances`, `cashflow`, `categories` and `budget`. Required. |
+| `year` | For `schedule-c`, `payees` and `contractors`. Required. |
+| `years` | For `trend`, such as `2024..2025`. Required. |
+| `by` | `month`, `quarter` or `year`, for `pnl` and `cashflow`. |
+| `tag` | Only rows with this tag. |
+| `limit` | Payees each way, for `payees`. The default is 10. |
+| `threshold` | Where the contractors list divides, such as `"600.00"`. |
+| `lines_year`, `all_lines` | For `schedule-c`, as `--lines-year` and `--all-lines`. |
+
+Each matches the `report` command's option of the same name. A parameter the report does not take is refused with
+400, as is `tag` on a report that cannot be limited to one.
+
+```bash
+curl -H "X-Solo-Books-Token: $KEY" "http://127.0.0.1:8765/api/v1/reports/pnl?business=1&period=2025-Q1"
+```
+
+```json
+{"format_version": 1, "report": "pnl", "generator": "solo-books 1.0.0", "note": "Bookkeeping summary, not tax or accounting advice.", "period": {"label": "2025-Q1", "start": "2025-01-01", "end": "2025-03-31"}, "tag": null, "businesses": [...]}
+```
+
+Any other format comes back as a file to save, byte for byte what `report KIND --format FORMAT -o FILE` writes, with
+a `Content-Disposition: attachment` header naming it after the report and period:
+
+```text
+HTTP/1.1 200 OK
+Content-Type: text/csv; charset=utf-8
+Content-Disposition: attachment; filename="pnl-2025-q1.csv"
+```
+
+### GET reports/{kind}/document
+
+The same parameters but `format`. The report laid out the way the HTML and Markdown formats lay it out, for a page to
+draw: a title, sections with a heading and intro lines, and blocks that are either a paragraph or a table. Dates follow
+the date setting.
+
+```json
+{
+  "report": "pnl", "title": "Profit and loss",
+  "sections": [
+    {"heading": "Profit and loss: Business A", "intro": ["Period: 2025-Q1 (2025-01-01 to 2025-03-31), cash basis"],
+     "blocks": [
+       {"headers": ["", "Total"], "rows": [["INCOME", ""], ["  4000 Sales", "25,970.85"]], "numeric": [1], "styles": ["group", ""]},
+       {"paragraph": "...", "warning": true}
+     ]}
+  ],
+  "note": "Bookkeeping summary, not tax or accounting advice."
+}
+```
+
+(Shortened.) `numeric` lists the columns that hold figures. `styles` marks each row as a `group` heading, a `total`, or
+neither.
+
+## History
+
+Every change to the books, from the command line or through the API, as `history` shows it.
+
+### GET history
+
+| Parameter | Meaning |
+|---|---|
+| `business` | Only this business's changes. |
+| `kind` | A kind such as `categorize` or `chart-rename`, or its first word, such as `rule` or `tag`. |
+| `period` | By the date of the change, in universal time. |
+| `row` | Only changes that touched this row id. |
+| `limit` | Changes per answer, 1 to 1000. The default is 100. |
+
+```json
+{
+  "changes": [
+    {"id": 37, "changed_at": "2026-11-10 06:53:43", "source": "web", "kind": "rule-move", "business_id": 1,
+     "business": "Business A", "rows": 0, "summary": "Moved rule 29 to number 1 in the order.",
+     "reverted_by": null, "revertible": false}
+  ]
+}
+```
+
+`source` is the command that made the change, or `web` for the pages and the API. `reverted_by` is the id of the
+change that took this one back. `revertible` says whether `history/{id}/revert` would try.
+
+### GET history/{id}
+
+The change with three more fields: `kind_means` in words, `detail` (what the change recorded beyond rows), and
+`row_changes`, each row as it was before and after:
+
+```json
+{
+  "change": {
+    "id": 26, "kind": "tag-add", "summary": "Tagged 2 row(s) Harbor Lane (a new tag).", "kind_means": "rows tagged",
+    "detail": {"created": true, "tag": "Harbor Lane", "tag_id": 1},
+    "row_changes": [
+      {"transaction_id": 1, "before": {"tag": "Harbor Lane", "tagged": false}, "after": {"tag": "Harbor Lane", "tagged": true},
+       "before_text": "not tagged Harbor Lane", "after_text": "tagged Harbor Lane"}
+    ]
+  }
+}
+```
+
+(Shortened.)
+
+### POST history/{id}/revert
+
+No body. Takes the change back, as `history revert` does: a booking, a note, a category's name or form line, a rule
+added or a rule deleted. The answer is `{"reverted": 26, "summary": "...", "change": {...}}`, where `change` is the
+new change that did it. Refused with 409, and nothing changed, for any other kind of change, a change already taken
+back, or a row changed again since.
+
+## Settings
+
+### GET config
+
+What `config list` shows. Read only: settings are changed with the `config` command.
+
+```json
+{
+  "settings_file": "/home/me/.config/solo-books/config.json", "settings_file_exists": false,
+  "profile": null, "profile_from": null,
+  "settings": [
+    {"name": "report_format", "value": "table", "shown": "table", "from": "default", "means": "how every report prints"}
+  ]
+}
+```
+
+(One setting is shown.) `from` is `default`, the settings file, the profile, or the environment variable that set it.
 
 ## Reconciliations
 

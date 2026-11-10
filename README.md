@@ -23,6 +23,29 @@ nobody has audited its output. Check what it gives you, and ask a professional a
 
 Read [What it does not do](#what-it-does-not-do) and [docs/TESTING.md](docs/TESTING.md) before you rely on it.
 
+## Contents
+
+- [Run it](#run-it)
+- [Try it on the sample year](#try-it-on-the-sample-year): [set up](#set-up), [import](#import),
+  [review](#review-what-the-rules-missed), [reconcile](#reconcile), [report](#report)
+- [Using it on your own books](#using-it-on-your-own-books)
+  - [Your first real account](#your-first-real-account), [column mappings](#column-mappings) and
+    [what happens on import](#what-happens-on-import)
+  - [Rules](#rules) and [the chart of accounts](#the-chart-of-accounts)
+  - [Reconciling](#reconciling), [fixing mistakes](#fixing-mistakes) and [history](#history)
+  - [Tags](#tags), [payees](#payees) and [budgets](#budgets)
+- [Settings and profiles](#settings-and-profiles)
+- [Keeping your books safe](#keeping-your-books-safe)
+- [What the reports mean](#what-the-reports-mean)
+- [Formats and exports](#formats-and-exports)
+- [What it does not do](#what-it-does-not-do)
+- [Exit status](#exit-status)
+- [How the code is laid out](#how-the-code-is-laid-out)
+- [Checks](#checks)
+- [Documentation](#documentation)
+
+Every command also explains itself with `--help`, such as `python -m solo_books report --help`.
+
 ## Run it
 
 You need Python 3.9 or newer. There is nothing to install. Run every command from this folder.
@@ -175,9 +198,18 @@ top lead to the other pages, which do what the matching commands do:
 - **Transactions**: find rows by account, period, category or text, book them, add notes, add or delete a row.
 - **Accounts**: balances, the column mapping and the reconciliations of each account.
 - **Imports**: upload an export with a dry run first, see past imports, undo one.
-- **Rules**: list, add, test and delete rules, and run them over the queue.
+- **Rules**: list rules in order, add one with any conditions, move, disable, enable, test and delete them, explain why
+  a row was or was not booked, and run them over the queue.
 - **Reconcile**: type a statement's figures, see the difference and what might explain it, finish or reopen a period.
+- **Payees**: each payee's rows and money by year; rename, merge, unmerge, and mark contractors.
+- **Budgets**: a year's budgets; set or delete one.
+- **Reports**: every report on screen, limited to a tag where the report allows it, and downloads as CSV, HTML or
+  Markdown.
+- **History**: every change, filtered by kind, date or row; each change row by row, and taking one back.
 - **Review**: the queue grouped by merchant, at the same address as before.
+
+On Transactions, a row's detail also shows its tags, with a box to add one and a button to take each off. Every change
+made on a page is kept in the history with `web` as its source.
 
 The pages use a JSON API under `/api/v1/`, which a script of your own can use too, with the key in a header. Every write
 goes through the same checks as the command line and is refused with the same message. [docs/API.md](docs/API.md)
@@ -553,6 +585,16 @@ python -m solo_books business rename "Business B" "Business Z"
 python -m solo_books account rename "B Checking" "Z Checking"
 ```
 
+The rest of this guide uses the old names, so put them back:
+
+```bash
+python -m solo_books business rename "Business Z" "Business B"
+```
+
+```bash
+python -m solo_books account rename "Z Checking" "B Checking"
+```
+
 A correction looks like `txn edit ID --amount -15.50 --description "CITY PARKING"`, on a row you added with `txn add`, as
 long as its statement period is not finished. `reconcile reopen` unlocks the latest finished period.
 
@@ -562,7 +604,7 @@ finished reconciliation. `business delete NAME` removes a business that has no a
 ### History
 
 Every change to the books is written down in the same step as the change itself: when, which command made it (or `web`
-for the review page), what kind of change it was, which rows it touched, and how each row looked before and after.
+for the pages and the API), what kind of change it was, which rows it touched, and how each row looked before and after.
 
 ```bash
 python -m solo_books history list --limit 10
@@ -703,6 +745,7 @@ python -m solo_books budget copy --from 2025 --to 2026
 
 `budget copy` refuses when the new year already has budgets, unless you add `--replace`. `budget delete --business B
 --category C --year Y` removes one category's budget for a year.
+
 ## Settings and profiles
 
 Settings change the defaults commands use: the books file, the business, how reports and dates print, the review
@@ -713,7 +756,8 @@ prints where it is:
 python -m solo_books config path
 ```
 
-Show dates as 03/31/2025 instead of 2025-03-31, then see every setting and where its value came from:
+Show dates as 03/31/2025 instead of 2025-03-31, on screen and in every report meant for people, then see every setting
+and where its value came from:
 
 ```bash
 python -m solo_books config set date_format us
@@ -836,7 +880,7 @@ to the last. **Categories** shows each category's row count, total, average row 
 
 ## Formats and exports
 
-Every report takes `--format`:
+Every report takes `--format`, or uses the `report_format` setting:
 
 | Format | For |
 |---|---|
@@ -860,6 +904,9 @@ python -m solo_books export journal --format beancount --period 2025 --business 
 `export archive` writes everything in the books, with ids, as one JSON file carrying a SHA-256 of its content.
 `import-archive` loads it into new, empty books, after checking the hash and every field. It refuses books that
 already hold anything.
+
+Journals carry each row's tags and its payee's name. Reports for people show dates the way the `date_format` setting
+asks; CSV, JSON, journals and archives always write ISO dates.
 
 [docs/EXPORTS.md](docs/EXPORTS.md) gives the shape of every format, journal and archive.
 
@@ -906,7 +953,8 @@ console redirect may not handle non-English names.
 | `tags.py`, `payees.py`, `budgets.py` | Tags on rows, the payee directory and its reports, budgets and their report. |
 | `reports.py`, `schedule_c.py` | Profit and loss, balances and the rollup. |
 | `analysis.py` | Cash flow, trend and category figures. |
-| `render.py` | Text tables and CSV for profit and loss, balances and the rollup. |
+| `report_builder.py` | Working out any report from its options, for the command line and the web alike. |
+| `render.py` | Text tables and CSV rows for each report. |
 | `formats/` | The report formats, one module each, and the printable layout HTML and Markdown share. |
 | `journal/` | Double-entry journals, one module per format. |
 | `archive.py` | The JSON archive: writing, checking every field, and loading. |
@@ -936,13 +984,15 @@ script that invented the sample year and knows each row's true category.
 
 [docs/TESTING.md](docs/TESTING.md) says what has been tested and what has not, with the numbers from real runs.
 
-## More
+## Documentation
 
 - [docs/BANK-LAYOUTS.md](docs/BANK-LAYOUTS.md): the layouts, and what to check in a dry run.
 - [docs/RULES.md](docs/RULES.md): every rule condition and action, the order, explain, and rule packs.
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md): every setting, where it comes from, and profiles.
-- [docs/RECOVERY.md](docs/RECOVERY.md): damage, restore, salvage, and what each message means.
 - [docs/EXPORTS.md](docs/EXPORTS.md): report formats, journals and archives, field by field.
+- [docs/API.md](docs/API.md): the local HTTP API the web pages use, endpoint by endpoint.
+- [docs/RECOVERY.md](docs/RECOVERY.md): damage, restore, salvage, and what each message means.
+- [docs/TESTING.md](docs/TESTING.md): what has been tested, on what, and what has not.
 - [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md).
 
 ## License

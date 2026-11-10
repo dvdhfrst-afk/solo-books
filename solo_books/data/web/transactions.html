@@ -45,6 +45,12 @@
     <button type="submit" class="primary">Book it</button>
     <button type="button" id="d-clear">Send back to review</button>
   </form>
+  <form id="detail-tags" class="fields">
+    <div class="wide" id="d-tags"></div>
+    <label>Add a tag <input id="d-tag" autocomplete="off" list="tag-names" maxlength="40"></label>
+    <datalist id="tag-names"></datalist>
+    <button type="submit">Tag it</button>
+  </form>
   <form id="detail-note" class="fields">
     <label class="wide">Note <textarea id="d-note"></textarea></label>
     <button type="submit">Save the note</button>

@@ -10,7 +10,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from . import history
 from .books import find_category, get_account
@@ -40,6 +40,28 @@ class _Planned:
     enabled: bool
 
 
+def conditions_to_json(rule: Rule, names: Dict[int, str]) -> List[dict]:
+    """A rule's conditions as a pack writes them, accounts by name."""
+    try:
+        return [CONDITION_KINDS[c.kind].to_json(c, names) for c in rule.conditions]
+    except BooksError as exc:
+        raise BooksError(f"rule {rule.id}: {exc}") from None
+
+
+def conditions_from_json(conn: sqlite3.Connection, business_id: int, raw: object) -> List[Condition]:
+    """Conditions written as a pack writes them, checked, in their standard order. An account must be the business's own."""
+
+    def find_account(name: str) -> int:
+        account = get_account(conn, name)
+        if account["business_id"] != business_id:
+            raise BooksError(f"account {name!r} belongs to another business")
+        return account["id"]
+
+    if not isinstance(raw, list):
+        raise BooksError("needs a list of conditions")
+    return check_conditions([condition_from_json(item, find_account) for item in raw])
+
+
 def export_pack(conn: sqlite3.Connection, business_id: int) -> str:
     names = account_names(conn)
     codes = {
@@ -51,10 +73,7 @@ def export_pack(conn: sqlite3.Connection, business_id: int) -> str:
         actions = [{"kind": "book_category", "category": codes[rule.category_id]}]
         if rule.note:
             actions.append({"kind": "set_note", "note": rule.note})
-        try:
-            conditions = [CONDITION_KINDS[c.kind].to_json(c, names) for c in rule.conditions]
-        except BooksError as exc:
-            raise BooksError(f"rule {rule.id}: {exc}") from None
+        conditions = conditions_to_json(rule, names)
         packed.append({"priority": rule.priority, "enabled": rule.enabled, "conditions": conditions, "actions": actions})
     return json.dumps({"pack_version": PACK_VERSION, "rules": packed}, indent=2, ensure_ascii=False) + "\n"
 
@@ -95,17 +114,7 @@ def _plan_rule(conn: sqlite3.Connection, business_id: int, data: object) -> _Pla
     enabled = data.get("enabled", True)
     if not isinstance(enabled, bool):
         raise BooksError("enabled must be true or false")
-
-    def find_account(name: str) -> int:
-        account = get_account(conn, name)
-        if account["business_id"] != business_id:
-            raise BooksError(f"account {name!r} belongs to another business")
-        return account["id"]
-
-    raw_conditions = data.get("conditions")
-    if not isinstance(raw_conditions, list):
-        raise BooksError("needs a list of conditions")
-    conditions = check_conditions([condition_from_json(item, find_account) for item in raw_conditions])
+    conditions = conditions_from_json(conn, business_id, data.get("conditions"))
     raw_actions = data.get("actions")
     if not isinstance(raw_actions, list):
         raise BooksError("needs a list of actions")

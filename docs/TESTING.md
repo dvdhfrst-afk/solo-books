@@ -10,12 +10,17 @@ its accounting or its security. Weigh it accordingly: keep backups, and tie your
 python -m unittest discover
 ```
 
-The suite has 489 tests and needs no network. Results:
+The suite has 740 tests and needs no network. Results:
 
 | System | Python | Result |
 |---|---|---|
-| Windows 11 | 3.9.25 | All pass, 1 skipped (owner-only file modes do not exist on Windows). About 110 seconds. |
-| Linux in a container (`python:3.9-slim`), as an ordinary user | 3.9.25 | All pass, none skipped. About 45 seconds. This run was of the 406 tests before the history, tags, payees and budgets. |
+| Windows 11 | 3.9.25 | All pass, 1 skipped (owner-only file modes do not exist on Windows). About 290 seconds. |
+| Linux in a container (`python:3.9-slim`), as an ordinary user | 3.9.25 | All pass, none skipped. About 210 seconds. |
+
+The web pages for history, payees, budgets, reports, rules and tags were also driven in a built-in Chromium browser
+against the sample year: each page loaded, and adding a rule, moving and disabling it, explaining a row, tagging and
+untagging a row, flagging a contractor, and setting and deleting a budget each worked, with the change in the history
+as `web`.
 
 No other Python version has been run, and macOS has not been run. The code uses nothing specific to any of them, and
 the syntax is checked against 3.9, but that is reasoning rather than a test.
@@ -63,11 +68,11 @@ With 99,494 rows waiting for review from 3,980 merchants:
 
 ## A stranger's run
 
-Twice, an AI agent that had not written the code and had seen only the README followed it from a fresh clone on Python
-3.9, then invented its own messy bank and card files and tried to break things. The first run found two ways to book money
-wrongly without noticing. The second found a third: different payees grouped under a shared opening such as WIRE TRANSFER
-FROM. All three were fixed and have tests, but the third fix has not had a stranger's run of its own. These were agents,
-not people: no human stranger has tried this.
+Twice, an automated tester that had not written the code and had seen only the README followed it from a fresh clone on
+Python 3.9, then invented its own messy bank and card files and tried to break things. The first run found two ways to
+book money wrongly without noticing. The second found a third: different payees grouped under a shared opening such as
+WIRE TRANSFER FROM. All three were fixed and have tests, but the third fix has not had a stranger's run of its own. Both
+runs were automated: no human stranger has tried this.
 
 ## The review page in a browser
 

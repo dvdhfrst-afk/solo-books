@@ -1,0 +1,40 @@
+<section class="panel" aria-labelledby="pick-title">
+  <h2 id="pick-title">Choose a report</h2>
+  <form id="pick" class="fields">
+    <label>Report <select id="k-kind">
+      <option value="pnl">Profit and loss</option>
+      <option value="balances">Balances</option>
+      <option value="schedule-c">Schedule C rollup</option>
+      <option value="cashflow">Cash flow</option>
+      <option value="categories">Categories</option>
+      <option value="trend">Trend</option>
+      <option value="budget">Budget against actual</option>
+      <option value="payees">Payees</option>
+      <option value="contractors">Payments to contractors</option>
+    </select></label>
+    <label>Business <select id="k-business"></select></label>
+    <label data-for="period">Period <input id="k-period" size="14" placeholder="2025" autocomplete="off"></label>
+    <label data-for="year">Year <input id="k-year" type="number" min="1900" max="2100" size="6"></label>
+    <label data-for="years">Years <input id="k-years" size="12" placeholder="2023..2025" autocomplete="off"></label>
+    <label data-for="by">Columns <select id="k-by">
+      <option value="total">One total</option>
+      <option value="month">By month</option>
+      <option value="quarter">By quarter</option>
+      <option value="year">By year</option>
+    </select></label>
+    <label data-for="tag">Only rows tagged <input id="k-tag" size="14" autocomplete="off"></label>
+    <label data-for="limit">Payees each way <input id="k-limit" type="number" min="1" max="1000" size="5" value="10"></label>
+    <label data-for="threshold">Divide the list at <input id="k-threshold" inputmode="decimal" size="10" value="600.00"></label>
+    <button type="submit" class="primary">Show</button>
+  </form>
+  <p class="muted">A period is a year (2025), a quarter (2025-Q2), a month (2025-03) or two dates (2025-01-15..2025-02-20).</p>
+  <div class="actions">
+    <button type="button" id="get-csv">Download CSV</button>
+    <button type="button" id="get-html">Download HTML</button>
+    <button type="button" id="get-markdown">Download Markdown</button>
+  </div>
+</section>
+<section class="panel" aria-labelledby="report-title">
+  <h2 id="report-title">Report</h2>
+  <div id="report" aria-live="polite"><p class="muted">Choose a report and press Show.</p></div>
+</section>
