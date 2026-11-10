@@ -63,8 +63,8 @@ def cmd_reconcile_list(args, conn) -> int:
             [
                 str(recon["id"]),
                 recon["account_name"],
-                recon["period_start"],
-                recon["period_end"],
+                args.settings.show_date(recon["period_start"]),
+                args.settings.show_date(recon["period_end"]),
                 reconcile.printed(report.account, recon["statement_begin_cents"]),
                 reconcile.printed(report.account, recon["statement_end_cents"]),
                 format_cents(report.difference),

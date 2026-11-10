@@ -88,8 +88,12 @@ def import_export(
     dry_run: bool = False,
     skip_bad: bool = False,
     mapping: Optional[Mapping] = None,
+    run_rules: bool = True,
 ) -> ImportResult:
-    """Import one file. Every row goes in, or none do, unless skip_bad is asked for."""
+    """Import one file. Every row goes in, or none do, unless skip_bad is asked for.
+
+    Without run_rules every new row waits for review, and 'rules apply' books what the rules can later.
+    """
     path = Path(path)
     parsed, sha, how_read = read_export(account, path, mapping)
     if parsed.errors and not skip_bad and not dry_run:
@@ -121,7 +125,7 @@ def import_export(
 
     try:
         with transaction(conn):
-            _insert_rows(conn, account, path.name, sha, how_read, parsed.rows, result)
+            _insert_rows(conn, account, path.name, sha, how_read, parsed.rows, result, run_rules)
             _settle_conflicts(path.name, result, stop=not (dry_run or skip_bad))
             _check_remapped_file(earlier, how_read, result, stop=not dry_run)
             if dry_run:
@@ -289,6 +293,7 @@ def _insert_rows(
     mapping_json: str,
     rows: List[ParsedRow],
     result: ImportResult,
+    run_rules: bool = True,
 ) -> None:
     cursor = conn.execute(
         "INSERT INTO imports (account_id, file_name, file_sha256, rows_read, rows_new, rows_duplicate, rows_skipped,"
@@ -297,7 +302,7 @@ def _insert_rows(
     )
     import_id = cursor.lastrowid
     result.import_id = import_id
-    rules = load_rules(conn, account["business_id"])
+    rules = load_rules(conn, account["business_id"]) if run_rules else []
     matcher = _RowMatcher(conn, account["id"])
 
     # Two identical rows on one day in one file are two real purchases: each needs its own row
@@ -325,12 +330,14 @@ def _insert_rows(
                 f"row. If that doubled something, remove the extra with 'txn delete'."
             )
         merchant = merchant_key(row.description)
-        rule = first_match(rules, account["id"], row.description, row.memo, merchant, row.amount_cents)
+        rule = first_match(
+            rules, account["id"], row.description, row.memo, merchant, row.amount_cents, posted_on=row.posted_on
+        )
         _warn_near_duplicate(conn, account, row, verdict.key, result)
         inserted = conn.execute(
             "INSERT INTO transactions (account_id, posted_on, amount_cents, description, memo, reference, merchant,"
-            " dedupe_key, natural_key, occurrence, import_id, category_id, category_source, rule_id)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " dedupe_key, natural_key, occurrence, import_id, category_id, category_source, rule_id, note, note_from_rule)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 account["id"],
                 row.posted_on.isoformat(),
@@ -346,6 +353,8 @@ def _insert_rows(
                 rule.category_id if rule else None,
                 "rule" if rule else None,
                 rule.id if rule else None,
+                rule.note if rule else "",
+                1 if rule and rule.note else 0,
             ),
         )
         _record_held(conn, import_id, inserted.lastrowid)

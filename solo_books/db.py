@@ -20,6 +20,55 @@ APPLICATION_ID = 0x534F4C4F
 BUSY_SECONDS = 10
 RECOVERY_DOC = "docs/RECOVERY.md"
 
+# Rules made of conditions. Kept apart so salvage can reuse the statements that turn old rules into conditions.
+_RULE_CONDITIONS_MIGRATION = """
+-- A rule is a list of conditions, all of which must match, and its actions: the category it books and,
+-- if it has one, the note it puts on the rows it books. The rules table's match_type, pattern, direction,
+-- min_cents, max_cents and account_id are what earlier schemas used. They are no longer read; match_type and
+-- pattern still get the rule's wording, if it has any, because they cannot be empty.
+CREATE TABLE rule_conditions (
+    id          INTEGER PRIMARY KEY,
+    rule_id     INTEGER NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL CHECK (kind IN ('contains', 'starts_with', 'exact', 'regex', 'amount_equals',
+                    'amount_at_least', 'amount_at_most', 'amount_between', 'direction', 'account',
+                    'date_between', 'day_of_month_between')),
+    -- Wording, or 'in' or 'out' for a direction.
+    text        TEXT,
+    -- Cents for an amount, a day of the month, or a date written as YYYYMMDD.
+    low         INTEGER CHECK (low IS NULL OR typeof(low) = 'integer'),
+    high        INTEGER CHECK (high IS NULL OR typeof(high) = 'integer'),
+    account_id  INTEGER REFERENCES accounts(id) ON DELETE CASCADE
+);
+CREATE INDEX rule_conditions_by_rule ON rule_conditions (rule_id);
+
+ALTER TABLE rules ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1));
+ALTER TABLE rules ADD COLUMN note TEXT NOT NULL DEFAULT '';
+-- 1 when a rule wrote the note, so a later rule run may replace it. A note a person wrote is never touched.
+ALTER TABLE transactions ADD COLUMN note_from_rule INTEGER NOT NULL DEFAULT 0 CHECK (note_from_rule IN (0, 1));
+
+-- Every existing rule keeps its id, its place in the order and what it matches.
+INSERT INTO rule_conditions (rule_id, kind, text)
+    SELECT id, CASE match_type WHEN 'starts' THEN 'starts_with' ELSE match_type END, pattern FROM rules ORDER BY id;
+INSERT INTO rule_conditions (rule_id, kind, text)
+    SELECT id, 'direction', direction FROM rules WHERE direction IS NOT NULL ORDER BY id;
+INSERT INTO rule_conditions (rule_id, kind, low, high)
+    SELECT id,
+           CASE WHEN min_cents IS NOT NULL AND max_cents IS NOT NULL AND min_cents = max_cents THEN 'amount_equals'
+                WHEN min_cents IS NOT NULL AND max_cents IS NOT NULL THEN 'amount_between'
+                WHEN min_cents IS NOT NULL THEN 'amount_at_least'
+                ELSE 'amount_at_most' END,
+           min_cents, max_cents
+    FROM rules WHERE min_cents IS NOT NULL OR max_cents IS NOT NULL ORDER BY id;
+INSERT INTO rule_conditions (rule_id, kind, account_id)
+    SELECT id, 'account', account_id FROM rules WHERE account_id IS NOT NULL ORDER BY id;
+
+-- A rule limited to an account goes with the account, as it always has.
+CREATE TRIGGER rules_leave_with_their_account BEFORE DELETE ON accounts
+BEGIN
+    DELETE FROM rules WHERE id IN (SELECT rule_id FROM rule_conditions WHERE kind = 'account' AND account_id = OLD.id);
+END;
+"""
+
 # Each entry moves the file forward one version. PRAGMA user_version records how far it has come.
 # Append new entries; never edit one that has shipped.
 MIGRATIONS = [
@@ -234,7 +283,13 @@ MIGRATIONS = [
         PRIMARY KEY (category_id, year, month)
     );
     """,
+    _RULE_CONDITIONS_MIGRATION,
 ]
+
+
+def legacy_rule_conditions() -> List[str]:
+    """The statements of the rule conditions step that turn the rules table's own columns into conditions."""
+    return [statement for statement in _statements(_RULE_CONDITIONS_MIGRATION) if "INSERT INTO rule_conditions" in statement]
 
 
 def resolve_db_path(explicit: Optional[str]) -> Path:

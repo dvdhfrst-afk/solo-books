@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sqlite3
 from dataclasses import dataclass, field
@@ -9,8 +10,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Set, Tuple
 
-from . import budgets, history, payees, tags
-from .db import APPLICATION_ID, BUSY_SECONDS, connect, friendly_error, schema_version
+from . import budgets, history, payees, rules, tags
+from .db import APPLICATION_ID, BUSY_SECONDS, connect, friendly_error, legacy_rule_conditions, schema_version
 from .csvmap import Mapping
 from .errors import BooksError
 from .files import looks_like_sqlite
@@ -162,10 +163,12 @@ def _check_bookkeeping(conn: sqlite3.Connection, report: CheckReport) -> None:
         "SELECT COUNT(*) FROM transactions t JOIN imports i ON i.id = t.import_id WHERE i.undone_at IS NOT NULL",
         "row(s) still belong to an import that was undone.",
     )
-    _check_rows(conn, report)
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    _check_rows(conn, report)
     # Books from before a table existed are read as they are, since 'check' never upgrades a file.
-    for table, module in (("history", history), ("tags", tags), ("payees", payees), ("budgets", budgets)):
+    for table, module in (
+        ("history", history), ("tags", tags), ("payees", payees), ("budgets", budgets), ("rule_conditions", rules),
+    ):
         if table in tables:
             report.problems.extend(module.problems(conn))
     if "history" in tables:
@@ -211,10 +214,62 @@ def _check_rows(conn: sqlite3.Connection, report: CheckReport) -> None:
         )
 
 
-# Restore
+# Dated backups
 
 def _stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def dated_backup_path(folder: Path, books_path: Path) -> Path:
+    """books.sqlite3 backs up as books-backup-20250131-235959.sqlite3, the time in UTC, so names sort by age.
+
+    A second backup in the same second gets -2 on the end, then -3, so it never meets the first.
+    """
+    books_path = Path(books_path)
+    stem = f"{books_path.stem}-backup-{_stamp()}"
+    candidate = Path(folder) / f"{stem}{books_path.suffix}"
+    count = 1
+    while candidate.exists():
+        count += 1
+        candidate = Path(folder) / f"{stem}-{count}{books_path.suffix}"
+    return candidate
+
+
+def prune_backups(folder: Path, books_path: Path, keep: int) -> Tuple[List[Path], List[Tuple[Path, str]]]:
+    """Remove all but the newest dated backups of these books from a folder.
+
+    Only files named the way 'backup' names them, and holding a database, are touched. Returns what was removed
+    and what could not be.
+    """
+    books_path = Path(books_path)
+    named = re.compile(rf"^{re.escape(books_path.stem)}-backup-(\d{{8}}-\d{{6}})(?:-(\d+))?{re.escape(books_path.suffix)}$")
+    try:
+        dated = [(named.match(p.name), p) for p in Path(folder).iterdir()]
+    except OSError as exc:
+        raise BooksError(f"cannot read the folder {folder}: {exc.strerror or exc}") from None
+    # Newest first: by the time in the name, then by the count a second backup in the same second carries.
+    found = [
+        path for match, path in sorted(
+            ((m, p) for m, p in dated if m and p.is_file()),
+            key=lambda item: (item[0].group(1), int(item[0].group(2) or 1)),
+            reverse=True,
+        )
+    ]
+    removed: List[Path] = []
+    failed: List[Tuple[Path, str]] = []
+    for path in found[keep:]:
+        if not looks_like_sqlite(path):
+            failed.append((path, "it does not hold a database, so it was left alone"))
+            continue
+        try:
+            path.unlink()
+            removed.append(path)
+        except OSError as exc:
+            failed.append((path, exc.strerror or str(exc)))
+    return removed, failed
+
+
+# Restore
 
 
 def _sidecars(path: Path) -> List[Path]:
@@ -442,6 +497,10 @@ def _copy_readable(source_path: Path, destination: Path, damaged: Path) -> Salva
                     report.copied[table] = report.copied.get(table, 0) + 1
                 except sqlite3.IntegrityError:
                     report.refused[table] = report.refused.get(table, 0) + 1
+        if "rules" in names and "rule_conditions" not in names:
+            # Books from before rules had conditions keep them in the rules table itself.
+            for statement in legacy_rule_conditions():
+                target.execute(statement)
         _clear_broken_links(target, report)
         target.execute("COMMIT")
     except BaseException:

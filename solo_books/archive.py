@@ -23,7 +23,8 @@ from .db import transaction
 from .errors import BooksError
 from .formats.base import GENERATOR
 from .ledger import natural_key
-from . import budgets, history, payees, tags
+from . import budgets, history, payees, rules, tags
+from .conditions import CONDITION_KINDS
 from .history import KINDS as HISTORY_KINDS
 from .money import MAX_CENTS
 from .periods import FIRST_YEAR, LAST_YEAR
@@ -102,9 +103,14 @@ TABLES_V1 = (
     )),
     TableSpec("rules", (
         _ID, _ref("business_id", "businesses"), _ref("account_id", "accounts", True), Field("priority", "int"),
-        Field("match_type", "choice", choices=MATCH_TYPES), Field("pattern", "name"),
+        Field("match_type", "choice", choices=MATCH_TYPES), Field("pattern", "text"),
         Field("direction", "choice", True, ("in", "out")), Field("min_cents", "cents", True),
         Field("max_cents", "cents", True), _ref("category_id", "categories"), _stamp("created_at"),
+        Field("enabled", "flag"), Field("note", "text"),
+    )),
+    TableSpec("rule_conditions", (
+        _ID, _ref("rule_id", "rules"), Field("kind", "choice", choices=tuple(CONDITION_KINDS)), Field("text", "text", True),
+        Field("low", "int", True), Field("high", "int", True), _ref("account_id", "accounts", True),
     )),
     TableSpec("reconciliations", (
         _ID, _ref("account_id", "accounts"), Field("period_start", "date"), Field("period_end", "date"),
@@ -118,6 +124,7 @@ TABLES_V1 = (
         _ref("import_id", "imports", True), _ref("category_id", "categories", True),
         Field("category_source", "choice", True, ("rule", "manual")), _ref("rule_id", "rules", True),
         _ref("reconciliation_id", "reconciliations", True), Field("note", "text"), _stamp("created_at"),
+        Field("note_from_rule", "flag"),
     )),
     TableSpec("import_rows", (_ref("import_id", "imports"), _ref("transaction_id", "transactions")), ("import_id", "transaction_id")),
     TableSpec("rule_exceptions", (_ref("rule_id", "rules"), _ref("transaction_id", "transactions")), ("rule_id", "transaction_id")),
@@ -380,9 +387,9 @@ def check_links(content: dict) -> None:
 
 
 def loaded_problems(conn: sqlite3.Connection) -> List[str]:
-    """What 'check' would say about the history, tags, payees and budgets just loaded, before they are kept."""
+    """What 'check' would say about the rules, history, tags, payees and budgets just loaded, before they are kept."""
     found: List[str] = []
-    for module in (history, tags, payees, budgets):
+    for module in (rules, history, tags, payees, budgets):
         found.extend(module.problems(conn))
     return found
 

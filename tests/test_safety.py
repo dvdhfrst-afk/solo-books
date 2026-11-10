@@ -410,10 +410,10 @@ class Upgrades(BooksCase):
 
     def test_every_row_survives_and_the_figures_still_tie(self) -> None:
         old = sqlite3.connect(str(self.db_path))
-        before = {
-            table: old.execute(f"SELECT * FROM {table} ORDER BY 1, 2").fetchall()
-            for table in ("businesses", "categories", "accounts", "imports", "rules", "transactions", "inventory_counts", "import_rows")
-        }
+        tables = ("businesses", "categories", "accounts", "imports", "rules", "transactions", "inventory_counts", "import_rows")
+        # Later schemas add columns. Every column the first schema had must still hold what it held.
+        columns = {table: ", ".join(row[1] for row in old.execute(f"PRAGMA table_info({table})")) for table in tables}
+        before = {table: old.execute(f"SELECT {columns[table]} FROM {table} ORDER BY 1, 2").fetchall() for table in tables}
         old.close()
         code, out, err = self.run_cli("account", "show", "A Checking")
         self.assertEqual(code, 0, err)
@@ -422,7 +422,7 @@ class Upgrades(BooksCase):
         self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], db.schema_version())
         self.assertEqual(conn.execute("PRAGMA application_id").fetchone()[0], db.APPLICATION_ID)
         for table, rows in before.items():
-            self.assertEqual(conn.execute(f"SELECT * FROM {table} ORDER BY 1, 2").fetchall(), rows, table)
+            self.assertEqual(conn.execute(f"SELECT {columns[table]} FROM {table} ORDER BY 1, 2").fetchall(), rows, table)
         conn.close()
         self.assertIn("11,928.15", out)
         self.assertIn("no problems found", self.ok("check"))
@@ -481,7 +481,65 @@ class Upgrades(BooksCase):
         conn.close()
 
 
-class Housekeeping(BooksCase):
+class FromEverySchema(BooksCase):
+    """A file left at any schema between the first and this one upgrades with every row, rule and label kept."""
+
+    RULE_COLUMNS = "id, business_id, priority, match_type, pattern, direction, min_cents, max_cents, category_id"
+
+    def _books_at(self, version: int) -> None:
+        if self.db_path.exists():
+            self.db_path.unlink()
+        make_v1(self.db_path)
+        conn = sqlite3.connect(str(self.db_path), isolation_level=None)
+        for number in range(1, version):
+            for statement in db._statements(db.MIGRATIONS[number]):
+                conn.execute(statement)
+            conn.execute(f"PRAGMA user_version = {number + 1}")
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "tags" in tables:
+            # The schema that brought tags, payees and budgets: give each something to keep.
+            conn.execute("INSERT INTO tags (business_id, name) VALUES (1, 'Harbor Lane')")
+            conn.execute(
+                "INSERT INTO transaction_tags (tag_id, transaction_id) SELECT 1, t.id FROM transactions t"
+                " JOIN accounts a ON a.id = t.account_id WHERE a.business_id = 1 ORDER BY t.id LIMIT 2"
+            )
+            conn.execute("INSERT INTO payees (business_id, merchant, display_name, contractor) VALUES (1, 'REDWOOD PLAZA', 'Redwood', 1)")
+            conn.execute(
+                "INSERT INTO budgets (business_id, category_id, year, month, amount_cents)"
+                " SELECT 1, id, 2025, 0, 120000 FROM categories WHERE business_id = 1 AND kind = 'expense' ORDER BY id LIMIT 1"
+            )
+        conn.close()
+
+    def _read(self, sql: str) -> list:
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            return conn.execute(sql).fetchall()
+        finally:
+            conn.close()
+
+    def test_each_schema_upgrades_with_nothing_lost(self) -> None:
+        self.conn.close()
+        for version in range(1, db.schema_version()):
+            with self.subTest(schema=version):
+                self._books_at(version)
+                rules_before = self._read(f"SELECT {self.RULE_COLUMNS} FROM rules ORDER BY id")
+                rows_before = self._read("SELECT id, amount_cents, category_id FROM transactions ORDER BY id")
+                code, out, err = self.run_cli("account", "show", "A Checking")
+                self.assertEqual(code, 0, err)
+                self.assertIn(f"from schema {version} to {db.schema_version()}", err)
+                self.assertIn("11,928.15", out)
+                self.assertEqual(self._read("PRAGMA user_version")[0][0], db.schema_version())
+                self.assertEqual(self._read("SELECT id, amount_cents, category_id FROM transactions ORDER BY id"), rows_before)
+                self.assertEqual(self._read(f"SELECT {self.RULE_COLUMNS} FROM rules ORDER BY id"), rules_before)
+                # Every rule became conditions that match what it matched.
+                bare = self._read("SELECT id FROM rules WHERE id NOT IN (SELECT rule_id FROM rule_conditions)")
+                self.assertEqual(bare, [])
+                self.assertIn("starts with 'CLIENT ' and money in", self.ok("rules", "list", "--business", "Business A"))
+                if version >= 3:
+                    self.assertIn("Harbor Lane", self.ok("tag", "list"))
+                    self.assertIn("Redwood", self.ok("payee", "list", "--business", "Business A"))
+                    self.assertIn("1,200.00", self.ok("budget", "list"))
+                self.assertIn("no problems found", self.ok("check"))
     def setUp(self) -> None:
         super().setUp()
         self.ok("business", "add", "Business A")

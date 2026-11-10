@@ -11,6 +11,7 @@ import json
 import sqlite3
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .conditions import Condition, account_condition, amount_condition, describe_all, direction_condition, text_condition
 from .db import transaction
 from .errors import BooksError
 from .money import format_cents
@@ -34,6 +35,10 @@ KINDS: Dict[str, str] = {
     "import": "a file imported",
     "import-undo": "an import taken back out",
     "rule-add": "a rule added",
+    "rule-edit": "a rule's conditions, category or note changed",
+    "rule-move": "a rule moved in the order",
+    "rule-enable": "a rule enabled",
+    "rule-disable": "a rule disabled",
     "rule-delete": "a rule deleted",
     "rule-apply": "rules run over rows",
     "rule-import": "rules added from a file",
@@ -364,17 +369,41 @@ def _revert_chart_map(conn, entry, detail) -> Tuple[str, List[RowChange]]:
     return f"category {category['code']} is back on {where}.", []
 
 
-RULE_FIELDS = (
-    "id", "business_id", "account_id", "priority", "match_type", "pattern", "direction", "min_cents", "max_cents",
-    "category_id", "created_at",
-)
+RULE_FIELDS = ("id", "business_id", "priority", "match_type", "pattern", "category_id", "enabled", "note", "created_at")
+CONDITION_FIELDS = ("kind", "text", "low", "high", "account_id")
 
 
-def rule_detail(conn: sqlite3.Connection, rule: sqlite3.Row) -> dict:
+def rule_detail(conn: sqlite3.Connection, rule_id: int) -> dict:
+    """Everything needed to bring a rule back: its columns, each condition, and its wording at the time."""
+    rule = conn.execute("SELECT * FROM rules WHERE id = ?", (rule_id,)).fetchone()
     detail = {name: rule[name] for name in RULE_FIELDS}
+    detail["conditions"] = [
+        {name: row[name] for name in CONDITION_FIELDS}
+        for row in conn.execute("SELECT * FROM rule_conditions WHERE rule_id = ? ORDER BY id", (rule_id,))
+    ]
     category = conn.execute("SELECT code, name FROM categories WHERE id = ?", (rule["category_id"],)).fetchone()
     detail["category"] = f"{category['code']} {category['name']}" if category else None
+    names = {row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM accounts")}
+    detail["said"] = describe_all([Condition(**c) for c in detail["conditions"]], names)
     return detail
+
+
+def _conditions_of(detail: dict) -> List[dict]:
+    """A deleted rule's conditions. An entry written before rules had conditions holds the rule's old columns."""
+    if "conditions" in detail:
+        return detail["conditions"]
+    found = [text_condition(detail["match_type"], detail["pattern"])]
+    if detail.get("direction"):
+        found.append(direction_condition(detail["direction"]))
+    if detail.get("min_cents") is not None or detail.get("max_cents") is not None:
+        found.append(amount_condition(detail.get("min_cents"), detail.get("max_cents")))
+    if detail.get("account_id") is not None:
+        found.append(account_condition(detail["account_id"]))
+    return [{name: getattr(c, name) for name in CONDITION_FIELDS} for c in found]
+
+
+def _rule_words(detail: dict) -> str:
+    return detail.get("said") or f"{detail['match_type']} {detail['pattern']!r}"
 
 
 def _revert_rule_add(conn, entry, detail) -> Tuple[str, List[RowChange]]:
@@ -396,7 +425,7 @@ def _revert_rule_add(conn, entry, detail) -> Tuple[str, List[RowChange]]:
         )
     conn.execute("DELETE FROM rules WHERE id = ?", (rule_id,))
     return (
-        f"rule {rule_id} ({detail['match_type']} {detail['pattern']!r}) is deleted, and the {len(changes)} row(s) it "
+        f"rule {rule_id} ({_rule_words(detail)}) is deleted, and the {len(changes)} row(s) it "
         "booked are back in the review queue.",
         changes,
     )
@@ -408,11 +437,13 @@ def _revert_rule_delete(conn, entry, detail) -> Tuple[str, List[RowChange]]:
     category = conn.execute("SELECT * FROM categories WHERE id = ?", (detail["category_id"],)).fetchone()
     if category is None or not category["active"]:
         raise BooksError(f"the rule's category {detail['category']} is retired now, so the rule cannot come back.")
-    if detail["account_id"] is not None and conn.execute(
-        "SELECT 1 FROM accounts WHERE id = ?", (detail["account_id"],)
-    ).fetchone() is None:
-        raise BooksError("the account that rule was limited to is gone. Nothing was changed.")
-    columns = [name for name in RULE_FIELDS if name != "id"]
+    conditions = _conditions_of(detail)
+    for condition in conditions:
+        if condition["account_id"] is not None and conn.execute(
+            "SELECT 1 FROM accounts WHERE id = ?", (condition["account_id"],)
+        ).fetchone() is None:
+            raise BooksError("the account that rule was limited to is gone. Nothing was changed.")
+    columns = [name for name in RULE_FIELDS if name != "id" and name in detail]
     values = [detail[name] for name in columns]
     if conn.execute("SELECT 1 FROM rules WHERE id = ?", (detail["id"],)).fetchone() is None:
         columns.insert(0, "id")
@@ -421,6 +452,10 @@ def _revert_rule_delete(conn, entry, detail) -> Tuple[str, List[RowChange]]:
         f"INSERT INTO rules ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})", values
     )
     rule_id = cursor.lastrowid
+    conn.executemany(
+        f"INSERT INTO rule_conditions (rule_id, {', '.join(CONDITION_FIELDS)}) VALUES (?, ?, ?, ?, ?, ?)",
+        [(rule_id, *(condition[name] for name in CONDITION_FIELDS)) for condition in conditions],
+    )
     for transaction_id in detail.get("held_back", []):
         conn.execute(
             "INSERT OR IGNORE INTO rule_exceptions (rule_id, transaction_id)"
@@ -440,7 +475,7 @@ def _revert_rule_delete(conn, entry, detail) -> Tuple[str, List[RowChange]]:
                 (transaction_id, booking(category["id"], label, "rule", None), booking(category["id"], label, "rule", rule_id))
             )
     again = f"rule {rule_id}" + (f" (it was rule {detail['id']})" if rule_id != detail["id"] else "")
-    return f"{again} is back: {detail['match_type']} {detail['pattern']!r} -> {label}.", changes
+    return f"{again} is back: {_rule_words(detail)} -> {label}.", changes
 
 
 # Checking the record

@@ -44,6 +44,26 @@
 
 - The `table` and `csv` output of `report pnl`, `report balances` and `report schedule-c` is unchanged, byte for
   byte, as are the preparer folder's CSV files.
+- Settings in a JSON file at a standard place for each system, or wherever `SOLO_BOOKS_CONFIG` says: the books file, the
+  default business, the report format, how dates show, the review page's port, whether `import` runs the rules, the
+  backup folder, and how many dated backups to keep. `config list`, `get`, `set`, `unset`, `path` and `check`. A flag
+  beats an environment variable, which beats the profile, which beats the file. See `docs/CONFIGURATION.md`.
+- Profiles, named sets of settings for more than one set of books: `profile add`, `list`, `show`, `use` and `remove`, and
+  `--profile NAME` on every command. `status` names the profile in use.
+- Rules with several conditions, all of which must match: wording, the size of the amount, money in or out, the
+  account, a date range and a range of days of the month. A rule can also put a note on the rows it books. See
+  `docs/RULES.md`.
+- `rules edit`, `rules move`, `rules disable`, `rules enable` and `rules explain`. `rules list` shows the order, the
+  conditions, whether each rule is on, and the rows it booked. `rules test` takes `--date`, `--memo` and `--why`.
+- JSON rule packs with `rules export --format json` and `rules import`, carrying every condition and action. Importing
+  the same pack twice adds nothing the second time.
+- `import --no-rules`, and `backup --prune` with `--keep`.
+
+### Changed
+
+- Books are upgraded on first use, with a copy of the old file kept beside them. Every rule keeps its id, its order
+  and what it matches.
+- `rules export` as CSV stops and names any rule its columns cannot carry, rather than leave it out.
 
 ## 1.0.0
 

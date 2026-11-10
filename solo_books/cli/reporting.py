@@ -12,7 +12,7 @@ from ..formats.base import Report
 from ..money import format_cents, parse_cents, plain_cents
 from ..periods import parse_period, year_period
 from ..text import slug
-from .common import add_command, add_group, chosen_businesses, deliver, positive_arg, year_arg
+from .common import add_command, add_group, chosen_businesses, deliver, positive_arg, report_format, the_business, year_arg
 
 PERIOD_HELP = "2025, 2025-Q2, 2025-03 or 2025-01-15..2025-02-20"
 GROUPINGS = ("total", "month", "quarter", "year")
@@ -20,12 +20,14 @@ GROUPINGS = ("total", "month", "quarter", "year")
 
 def _add_output(parser) -> None:
     parser.add_argument("--business", help="default: every business")
-    parser.add_argument("--format", choices=formats.names(), default="table", help=formats.help_text())
+    parser.add_argument(
+        "--format", choices=formats.names(), help=f"{formats.help_text()}. Default table, or the report_format setting"
+    )
     parser.add_argument("-o", "--output", help="write to this file instead of the screen")
 
 
 def _write(report: Report, args) -> int:
-    fmt = formats.get(args.format)
+    fmt = formats.get(report_format(args))
     deliver(fmt.render(report), args.output, fmt.byte_order_mark)
     return 0
 
@@ -352,7 +354,7 @@ def cmd_report_preparer(args, conn) -> int:
 
 
 def cmd_inventory_set(args, conn) -> int:
-    business = books.get_business(conn, args.business)
+    business = the_business(conn, args)
     books.set_inventory(conn, business["id"], args.year, parse_cents(args.beginning), parse_cents(args.ending))
     print(f"Inventory counts saved for {business['name']}, {args.year}.")
     return 0

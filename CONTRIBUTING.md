@@ -44,6 +44,12 @@ A new command in an existing area goes in that area's module and its `register`.
 
 Handlers print and return an exit status. Bookkeeping belongs in the modules they call, not in the command line.
 
+Before a handler runs, `args.settings` holds every setting from `solo_books/config.py`, and `args.db` the books file
+the settings chose. A flag that overrides a setting defaults to `None`, and the handler asks
+`args.settings.pick(NAME, flag_value)`, so the order flag, environment, profile, file, default holds everywhere. A new
+setting goes in `SETTINGS` in `config.py` and in `docs/CONFIGURATION.md`. A command that must run while the settings file
+is damaged, as `config check` does, is added with `uses_settings=False`.
+
 ## Adding a web address
 
 The local app lives in `solo_books/web/`. `server.py` checks every request before any handler sees it: the Host

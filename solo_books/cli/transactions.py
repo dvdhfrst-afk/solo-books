@@ -1,11 +1,11 @@
 """Single rows: finding, showing, adding, correcting, deleting and noting them."""
 from __future__ import annotations
 
-from .. import books, history, ledger, payees, render, schedule_c, tags
+from .. import books, history, ledger, payees, render, rules, schedule_c, tags
 from ..errors import BooksError
 from ..money import format_cents, parse_cents
 from ..periods import parse_iso_date, parse_period
-from .common import add_command, add_group, deliver, positive_arg, scope_ids
+from .common import add_command, add_group, deliver, positive_arg, scope_ids, the_business
 
 
 TXN_HEADERS = ["Id", "Date", "Account", "Amount", "Description", "Category", "By", "Rec"]
@@ -16,7 +16,7 @@ def cmd_txn_list(args, conn) -> int:
     category_id = None
     if args.category:
         if business_id is None:
-            business_id = books.get_business(conn, None)["id"]
+            business_id = the_business(conn, args)["id"]
         category_id = books.find_category(conn, business_id, args.category)["id"]
     tag_ids = None
     if args.tag:
@@ -39,7 +39,7 @@ def cmd_txn_list(args, conn) -> int:
     table_rows = [
         [
             str(r["id"]),
-            r["posted_on"],
+            args.settings.show_date(r["posted_on"]),
             r["account_name"],
             format_cents(r["amount_cents"]),
             r["description"],
@@ -60,18 +60,16 @@ def _booked_by(conn, row) -> str:
     booked = f"{row['category_code']} {row['category_name']}"
     if row["category_source"] == "manual":
         return f"{booked}, by hand"
-    rule = None
-    if row["rule_id"] is not None:
-        rule = conn.execute("SELECT match_type, pattern FROM rules WHERE id = ?", (row["rule_id"],)).fetchone()
-    if rule is None:
+    described = rules.describe_rule(conn, row["rule_id"]) if row["rule_id"] is not None else None
+    if described is None:
         return f"{booked}, by a rule since deleted"
-    return f"{booked}, by rule {row['rule_id']} ({rule['match_type']} {rule['pattern']!r})"
+    return f"{booked}, by rule {row['rule_id']} ({described})"
 
 
 def cmd_txn_show(args, conn) -> int:
     row = ledger.get_transaction(conn, args.id)
     print(f"Transaction {row['id']}")
-    print(f"  Date:        {row['posted_on']}")
+    print(f"  Date:        {args.settings.show_date(row['posted_on'])}")
     print(f"  Account:     {row['account_name']} ({row['business_name']})")
     print(f"  Amount:      {format_cents(row['amount_cents'])}")
     print(f"  Description: {row['description']}")
@@ -97,7 +95,7 @@ def cmd_txn_show(args, conn) -> int:
     else:
         print("  Imported:    no, added by hand")
     if row["note"]:
-        print(f"  Note:        {row['note']}")
+        print(f"  Note:        {row['note']}" + ("  (from a rule)" if row["note_from_rule"] else ""))
     carried = tags.tags_of(conn, row["id"])
     print(f"  Tags:        {', '.join(carried) if carried else 'none'}")
     changes = history.list_entries(conn, transaction_id=row["id"])

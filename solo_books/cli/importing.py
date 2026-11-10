@@ -1,6 +1,7 @@
 """Importing bank and card files, and the record of past imports."""
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 from .. import books, importer, render
@@ -10,10 +11,10 @@ from .common import add_command, add_group, program_name
 _MAX_ROW_WARNINGS = 10
 
 
-def _print_import(result: importer.ImportResult) -> None:
+def _print_import(result: importer.ImportResult, show_date) -> None:
     mode = "DRY RUN, nothing saved. " if result.dry_run else ""
     print(f"{mode}{result.file_name} into {result.account}")
-    span = f" ({result.earliest} to {result.latest})" if result.earliest else ""
+    span = f" ({show_date(result.earliest)} to {show_date(result.latest)})" if result.earliest else ""
     print(f"  rows read:          {result.rows_read}{span}")
     print(f"  new:                {result.rows_new}")
     print(f"  already in books:   {result.rows_duplicate}")
@@ -30,7 +31,7 @@ def _print_import(result: importer.ImportResult) -> None:
         print("A real import stops on these rows and saves nothing, unless you pass --skip-bad.")
     if result.dry_run and result.samples:
         print("How the first rows read (positive is money in):")
-        rows = [[str(r.posted_on), format_cents(r.amount_cents), r.description] for r in result.samples]
+        rows = [[show_date(r.posted_on), format_cents(r.amount_cents), r.description] for r in result.samples]
         print(render.table(["Date", "Amount", "Description"], rows, {1}))
     for warning in result.warnings:
         print(f"WARNING: {warning}")
@@ -42,8 +43,13 @@ def _print_import(result: importer.ImportResult) -> None:
 
 def cmd_import(args, conn) -> int:
     account = books.get_account(conn, args.account)
-    result = importer.import_export(conn, account, Path(args.file), dry_run=args.dry_run, skip_bad=args.skip_bad)
-    _print_import(result)
+    run_rules = args.settings.pick("import_runs_rules", args.rules)
+    result = importer.import_export(
+        conn, account, Path(args.file), dry_run=args.dry_run, skip_bad=args.skip_bad, run_rules=run_rules
+    )
+    _print_import(result, args.settings.show_date)
+    if not run_rules and result.rows_new:
+        print(f"The rules were not run. '{program_name()} rules apply' books what they can.")
     if not result.dry_run and result.waiting_for_review:
         print(f"Next: {program_name()} review --groups")
     return 0
@@ -83,6 +89,10 @@ def register(commands) -> None:
     p.add_argument("file")
     p.add_argument("--dry-run", action="store_true", help="report what would happen and save nothing")
     p.add_argument("--skip-bad", action="store_true", help="import the readable rows even if some are not")
+    p.add_argument(
+        "--rules", action=argparse.BooleanOptionalAction, default=None,
+        help="book new rows with the rules as they arrive (default yes, or the import_runs_rules setting)",
+    )
 
     imports = add_group(commands, "imports", "past imports")
     p = add_command(imports, "list", cmd_imports_list, "list imports")

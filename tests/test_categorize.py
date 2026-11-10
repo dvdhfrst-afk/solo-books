@@ -203,7 +203,7 @@ class Rules(ChartBase):
         rule = self.rule("contains", "COFFEE")
         rules.apply_rules(self.conn, self.biz["id"])
         # Point the row at a rule that no longer matches.
-        self.conn.execute("UPDATE rules SET pattern = 'TEA' WHERE id = ?", (rule,))
+        self.conn.execute("UPDATE rule_conditions SET text = 'TEA' WHERE rule_id = ?", (rule,))
         outcome = rules.apply_rules(self.conn, self.biz["id"], recheck=True)
         self.assertEqual(outcome["returned_to_review"], 1)
         self.assertIsNone(ledger.get_transaction(self.conn, row)["category_id"])

@@ -17,6 +17,7 @@ from . import (
     categorization_rules,
     exporting,
     history_log,
+    configuration,
     importing,
     payee_directory,
     reconciling,
@@ -44,6 +45,7 @@ AREAS = (
     exporting,
     history_log,
     web_page,
+    configuration,
 )
 
 _EPILOG = """Exit status: 0 done; 1 a finding (a reconciliation that does not tie, a check with problems);
@@ -78,8 +80,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         parser = build_parser()
         args = parser.parse_args(attach_negative_amounts(sys.argv[1:] if argv is None else list(argv)))
-        if not hasattr(args, "db"):
-            args.db = None
+        for name in ("db", "profile"):
+            if not hasattr(args, name):
+                setattr(args, name, None)
         return finish_output(guarded(args))
     finally:
         sys.stdout, sys.stderr = real_out, real_err

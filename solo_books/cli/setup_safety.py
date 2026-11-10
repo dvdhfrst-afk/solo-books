@@ -1,11 +1,11 @@
 """Setting up the books and keeping them safe: init, status, backup, check, restore, salvage."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import books, db, ledger, render, review, safety
-from .common import EXIT_FINDING, EXIT_OK, add_command, program_name
+from ..errors import BooksError
+from .common import EXIT_FINDING, EXIT_OK, add_command, positive_arg, program_name
 
 
 def cmd_init(args) -> int:
@@ -22,6 +22,8 @@ def cmd_init(args) -> int:
 
 def cmd_status(args, conn) -> int:
     print(f"Books: {db.resolve_db_path(args.db)}")
+    settings = args.settings
+    print(f"Profile: {settings.profile} (from {settings.profile_source})" if settings.profile else "Profile: none")
     print(f"Last backup: {db.get_meta(conn, 'last_backup_at') or 'never. Make one with the backup command.'}")
     if not books.list_businesses(conn):
         print(f"\nNo businesses yet. Next: {program_name()} business add \"Your Business\"")
@@ -39,8 +41,8 @@ def cmd_status(args, conn) -> int:
                     business["name"],
                     account["name"],
                     str(summary["rows"]),
-                    summary["latest"] or "-",
-                    summary["reconciled_through"] or "never",
+                    settings.show_date(summary["latest"]) or "-",
+                    settings.show_date(summary["reconciled_through"]) or "never",
                 ]
             )
         print(f"{business['name']}: {waiting} row(s) waiting for review")
@@ -51,11 +53,23 @@ def cmd_status(args, conn) -> int:
 
 def cmd_backup(args, conn) -> int:
     books_path = db.resolve_db_path(args.db)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    target = Path(args.file) if args.file else books_path.with_name(f"{books_path.stem}-backup-{stamp}{books_path.suffix}")
+    if args.keep is not None and not args.prune:
+        raise BooksError("--keep says how many dated backups --prune keeps, so give --prune with it.")
+    if args.prune and args.file:
+        raise BooksError("--prune keeps the newest dated backups, so it works only when no FILE is named.")
+    folder = Path(args.settings["backup_folder"]) if args.settings["backup_folder"] else books_path.parent
+    target = Path(args.file) if args.file else safety.dated_backup_path(folder, books_path)
     db.backup(conn, target)
     rows = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
     print(f"Backed up {rows} row(s) to {target}. It passed SQLite's integrity check.")
+    if args.prune:
+        keep = args.settings.pick("backup_keep", args.keep)
+        removed, failed = safety.prune_backups(folder, books_path, keep)
+        print(f"Kept the newest {keep} dated backup(s) of {books_path.name} in {folder}; removed {len(removed)}.")
+        for path in removed:
+            print(f"  removed {path.name}")
+        for path, reason in failed:
+            print(f"WARNING: could not remove {path.name}: {reason}")
     return 0
 
 
@@ -128,7 +142,9 @@ def register(commands) -> None:
     add_command(commands, "init", cmd_init, "create empty books", needs_conn=False)
     add_command(commands, "status", cmd_status, "what is waiting, and how far each account is reconciled")
     p = add_command(commands, "backup", cmd_backup, "write a checked copy of the books to a new file")
-    p.add_argument("file", nargs="?", help="default: a dated name beside the books")
+    p.add_argument("file", nargs="?", help="default: a dated name in the backup_folder setting, else beside the books")
+    p.add_argument("--prune", action="store_true", help="then remove all but the newest dated backups of these books")
+    p.add_argument("--keep", type=positive_arg, help="how many dated backups --prune keeps (default 10, or the backup_keep setting)")
     add_command(commands, "check", cmd_check, "check the books for damage and broken bookkeeping; exit status 1 if anything is wrong", needs_conn=False)
     p = add_command(commands, "restore", cmd_restore, "put a backup in place of the books; the books as they were are kept", needs_conn=False)
     p.add_argument("file", help="the backup to restore")

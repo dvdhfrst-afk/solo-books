@@ -285,7 +285,8 @@ def set_note(conn: sqlite3.Connection, transaction_id: int, note: str) -> None:
     row = get_transaction(conn, transaction_id)
     note = clean_cell(note)
     with transaction(conn):
-        conn.execute("UPDATE transactions SET note = ? WHERE id = ?", (note, transaction_id))
+        # A note someone writes is theirs from now on: no rule's note replaces it.
+        conn.execute("UPDATE transactions SET note = ?, note_from_rule = 0 WHERE id = ?", (note, transaction_id))
         history.record(
             conn, "note", f"Changed the note on transaction {transaction_id}.", row["business_id"], {},
             [(transaction_id, {"note": row["note"]}, {"note": note})],
